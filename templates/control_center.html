@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Control Center{% endblock %}
+{% block heading %}Control Center{% endblock %}
+{% block content %}
+<div class="kpis">
+  <div class="kpi"><div class="label">Vehicles at junction</div><div class="value" id="kTotal">0</div><div class="sub">detected right now</div></div>
+  <div class="kpi"><div class="label">Vehicles counted</div><div class="value" id="kSeen">0</div><div class="sub">since system start</div></div>
+  <div class="kpi"><div class="label">Current green</div><div class="value" id="kPhase">—</div><div class="sub" id="kPhaseSub">&nbsp;</div></div>
+  <div class="kpi"><div class="label">Active incidents</div><div class="value" id="kInc">0</div><div class="sub" id="kIncSub">all lanes clear</div></div>
+  <div class="kpi"><div class="label">Signal cycle</div><div class="value" id="kCycle">0</div><div class="sub" id="kUptime">uptime 0 min</div></div>
+</div>
+
+<div class="cc-grid">
+  <section class="cams">
+    {% for lane in lanes %}
+    <div class="cam" id="cam-{{ lane.id }}">
+      <div class="cam-head">
+        <div class="cam-title">{{ lane.name }}<span>{{ lane.direction }} approach</span></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="badge Low" id="dens-{{ lane.id }}">Low</span>
+          <div class="lamp3" id="lamp-{{ lane.id }}"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+        </div>
+      </div>
+      <img src="/stream/{{ lane.id }}" alt="{{ lane.name }} camera">
+      <div class="cam-foot">
+        <div>Vehicles<b id="cnt-{{ lane.id }}">0</b></div>
+        <div>Green time<b id="gt-{{ lane.id }}">—</b></div>
+        <div>Mix<b id="mix-{{ lane.id }}" style="font-size:12px;font-weight:500;margin-top:3px">—</b></div>
+        <div>Counted<b id="seen-{{ lane.id }}">0</b></div>
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section class="side">
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">Live junction</div><span class="badge" id="phaseBadge">—</span></div>
+      <canvas id="junction"></canvas>
+      <div class="phase-bar" id="phaseBar"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">Adaptive signal plan</div><span class="muted small">green = 10 s + 2 s × vehicles</span></div>
+      <table>
+        <thead><tr><th>Lane</th><th class="num">Vehicles</th><th>Density</th><th class="num">Green</th><th>Signal</th></tr></thead>
+        <tbody id="planBody"></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">Live alerts</div><a href="/incidents" class="small">View all</a></div>
+      <div class="alerts" id="alerts"><div class="empty">No incidents. All lanes flowing.</div></div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='junction.js') }}"></script>
+<script>
+const view = new JunctionView(document.getElementById("junction"));
+const LIGHT_LABEL = { GREEN: "GO", YELLOW: "CLEARING", RED: "STOP", BLOCKED: "BLOCKED" };
+
+function lamp(el, light) {
+  const [r, y, g] = el.children;
+  r.className = "r" + (light === "RED" || light === "BLOCKED" ? " on r" : "");
+  y.className = "y" + (light === "YELLOW" ? " on y" : "");
+  g.className = "g" + (light === "GREEN" ? " on g" : "");
+}
+
+function mix(t) {
+  const parts = [];
+  if (t.car) parts.push(`${t.car} car`);
+  if (t.motorcycle) parts.push(`${t.motorcycle} bike`);
+  if (t.bus) parts.push(`${t.bus} bus`);
+  if (t.truck) parts.push(`${t.truck} truck`);
+  return parts.join(" · ") || "—";
+}
+
+async function tick() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); } catch (e) { return; }
+  const sig = s.signal || {};
+  view.update({ lanes: s.lanes, active_lane: sig.active_lane, phase: sig.phase, remaining: sig.remaining });
+
+  const act = s.lanes.find((l) => l.id === sig.active_lane);
+  document.getElementById("kTotal").textContent = s.total_vehicles_now;
+  document.getElementById("kSeen").textContent = s.vehicles_seen.toLocaleString();
+  document.getElementById("kPhase").textContent = act && sig.phase !== "ALL_RED" ? act.direction : "All red";
+  document.getElementById("kPhaseSub").textContent = act && sig.phase !== "ALL_RED" ? `${act.name} · ${Math.ceil(sig.remaining)} s left` : "clearing junction";
+  document.getElementById("kInc").textContent = s.active_incidents;
+  document.getElementById("kInc").style.color = s.active_incidents ? "var(--red)" : "";
+  document.getElementById("kIncSub").textContent = s.active_incidents ? "lane skipped by controller" : "all lanes clear";
+  document.getElementById("kCycle").textContent = sig.cycle ?? 0;
+  document.getElementById("kUptime").textContent = `uptime ${Math.floor(s.uptime_s / 60)} min`;
+
+  const pb = document.getElementById("phaseBadge");
+  pb.className = "badge " + (sig.phase === "GREEN" ? "green" : sig.phase === "YELLOW" ? "yellow" : "red");
+  pb.textContent = sig.phase === "ALL_RED" ? "ALL RED" : `${sig.phase} · ${Math.ceil(sig.remaining)}s`;
+
+  let rows = "", bar = "";
+  s.lanes.forEach((l) => {
+    const cam = document.getElementById(`cam-${l.id}`);
+    cam.className = "cam" + (l.light === "GREEN" ? " green" : l.light === "YELLOW" ? " yellow" : l.light === "BLOCKED" ? " blocked" : "");
+    lamp(document.getElementById(`lamp-${l.id}`), l.light);
+    const d = document.getElementById(`dens-${l.id}`);
+    d.className = "badge " + (l.blocked ? "blocked" : l.density);
+    d.textContent = l.blocked ? "INCIDENT" : `${l.density} density`;
+    document.getElementById(`cnt-${l.id}`).textContent = l.count;
+    document.getElementById(`gt-${l.id}`).textContent = l.blocked ? "skipped" : `${l.green_time} s`;
+    document.getElementById(`mix-${l.id}`).textContent = mix(l.by_type);
+    document.getElementById(`seen-${l.id}`).textContent = l.vehicles_seen;
+    const cls = l.light === "GREEN" ? "green" : l.light === "YELLOW" ? "yellow" : l.light === "BLOCKED" ? "blocked" : "red";
+    rows += `<tr><td><b>${l.name}</b> <span class="muted small">${l.direction}</span></td><td class="num">${l.count}</td>
+      <td><span class="badge ${l.density}">${l.density}</span></td><td class="num">${l.blocked ? "—" : l.green_time + " s"}</td>
+      <td><span class="badge ${cls}">${LIGHT_LABEL[l.light]}</span></td></tr>`;
+    const on = l.id === sig.active_lane && (sig.phase === "GREEN" || sig.phase === "YELLOW");
+    bar += `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""} ${l.blocked ? "blocked" : ""}">
+      ${l.direction}<b>${l.blocked ? "BLOCKED" : on ? Math.ceil(sig.remaining) + " s" : l.green_time + " s"}</b></div>`;
+  });
+  document.getElementById("planBody").innerHTML = rows;
+  document.getElementById("phaseBar").innerHTML = bar;
+}
+
+async function loadAlerts() {
+  const list = await (await fetch("/api/incidents")).json();
+  const box = document.getElementById("alerts");
+  if (!list.length) { box.innerHTML = `<div class="empty">No incidents. All lanes flowing.</div>`; return; }
+  box.innerHTML = list.slice(0, 8).map((i) => `
+    <div class="alert-item ${i.status === "Cleared" ? "cleared" : ""}">
+      <div class="icon">⚠</div>
+      <div><div class="t">${i.lane_name} (${i.direction}): stationary ${i.vehicle}</div>
+      <div class="muted small">${i.time} · stopped ${i.duration_s}s · ${i.status === "Active" ? "lane skipped in signal cycle" : "cleared"}</div></div>
+    </div>`).join("");
+}
+
+tick(); loadAlerts();
+setInterval(tick, 500);
+setInterval(loadAlerts, 2000);
+</script>
+{% endblock %}

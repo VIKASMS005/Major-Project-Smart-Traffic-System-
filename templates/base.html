@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Control Center{% endblock %} · Smart Traffic Control</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚦</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">
+      <span class="l r"></span><span class="l y"></span><span class="l g"></span>
+    </div>
+    <div>
+      <div class="brand-name">SmartSignal</div>
+      <div class="brand-sub">AI Traffic Control</div>
+    </div>
+  </div>
+  <nav class="nav">
+    <a href="/" class="{{ 'active' if page=='control' }}"><svg viewBox="0 0 24 24"><path d="M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z"/></svg>Control Center</a>
+    <a href="/analytics" class="{{ 'active' if page=='analytics' }}"><svg viewBox="0 0 24 24"><path d="M4 20V10h3v10zm6 0V4h3v16zm6 0v-7h3v7z"/></svg>Analytics</a>
+    <a href="/signals" class="{{ 'active' if page=='signals' }}"><svg viewBox="0 0 24 24"><path d="M9 2h6a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm3 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>Signal Timing</a>
+    <a href="/incidents" class="{{ 'active' if page=='incidents' }}"><svg viewBox="0 0 24 24"><path d="M12 2 1 21h22zm0 6 1 7h-2zm0 9a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/></svg>Incidents<span id="navIncidents" class="pill hidden">0</span></a>
+    <a href="/settings" class="{{ 'active' if page=='settings' }}"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7 7 0 0 0-1.7-1L15 3h-4l-.4 2.9a7 7 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7 7 0 0 0 1.7 1L11 21h4l.4-2.9a7 7 0 0 0 1.7-1l2.5 1 2-3.5zM13 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>Settings</a>
+  </nav>
+  <div class="sidebar-foot">
+    <div class="status"><span class="dot"></span>System online</div>
+    <div class="muted small">YOLOv8 · 4 cameras · Adaptive control</div>
+  </div>
+</aside>
+
+<div class="main">
+  <header class="topbar">
+    <div>
+      <div class="crumb">{{ junction_name }} · 4-way intersection</div>
+      <h1>{% block heading %}Control Center{% endblock %}</h1>
+    </div>
+    <div class="topbar-right">
+      <div class="mode"><span class="dot"></span>AI ADAPTIVE MODE</div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+  </header>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<script>
+  // shared: clock + incident badge
+  setInterval(() => { document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-GB"); }, 1000);
+  async function refreshBadge() {
+    try {
+      const s = await (await fetch("/api/state")).json();
+      const b = document.getElementById("navIncidents");
+      b.textContent = s.active_incidents;
+      b.classList.toggle("hidden", !s.active_incidents);
+    } catch (e) {}
+  }
+  setInterval(refreshBadge, 3000); refreshBadge();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

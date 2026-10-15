@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Analytics{% endblock %}
+{% block heading %}Traffic Analytics{% endblock %}
+{% block content %}
+<div class="kpis" id="aKpis"></div>
+
+<div class="grid-3">
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Vehicles per approach (live, last 10 min)</div></div>
+    <div class="chart-box"><canvas id="trend"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Vehicle mix</div></div>
+    <div class="chart-box"><canvas id="mix"></canvas></div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Green time allocated per approach</div><span class="muted small">average of recent phases</span></div>
+    <div class="chart-box"><canvas id="green"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Vehicles counted per approach</div></div>
+    <div class="chart-box"><canvas id="counted"></canvas></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <div class="panel-title">Performance vs conventional fixed-time signal</div>
+    <span class="muted small">average waiting time per vehicle, simulated 1-hour periods</span>
+  </div>
+  <div class="grid-2" style="margin-bottom:0">
+    <div class="chart-box"><canvas id="perf"></canvas></div>
+    <table>
+      <thead><tr><th>Traffic level</th><th class="num">Fixed-time</th><th class="num">Adaptive</th><th class="num">AI (RL)</th><th class="num">Wait reduced</th></tr></thead>
+      <tbody id="perfBody"><tr><td colspan="5" class="muted">Calculating…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+Chart.defaults.color = "#8a9bb0";
+Chart.defaults.borderColor = "#1f2b38";
+Chart.defaults.font.family = "Inter, Segoe UI, sans-serif";
+const LANE_COLORS = ["#3d8bfd", "#ff9f40", "#2fe36b", "#a78bfa"];
+const CLASS_COLORS = { car: "#3d8bfd", motorcycle: "#ffc61a", bus: "#ff9f40", truck: "#a78bfa" };
+const opts = (extra = {}) => ({ responsive: true, maintainAspectRatio: false, animation: false, ...extra });
+
+const trend = new Chart(document.getElementById("trend"), { type: "line", data: { labels: [], datasets: [] },
+  options: opts({ elements: { point: { radius: 0 } }, interaction: { mode: "index", intersect: false },
+    scales: { y: { beginAtZero: true, title: { display: true, text: "vehicles in view" } }, x: { ticks: { maxTicksLimit: 8 } } } }) });
+const mix = new Chart(document.getElementById("mix"), { type: "doughnut",
+  data: { labels: ["Cars", "Motorcycles", "Buses", "Trucks"], datasets: [{ data: [0, 0, 0, 0], borderWidth: 0,
+    backgroundColor: Object.values(CLASS_COLORS) }] }, options: opts({ cutout: "62%", plugins: { legend: { position: "bottom" } } }) });
+const green = new Chart(document.getElementById("green"), { type: "bar", data: { labels: [], datasets: [{ data: [], backgroundColor: LANE_COLORS, borderRadius: 6 }] },
+  options: opts({ plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, title: { display: true, text: "seconds" } } } }) });
+const counted = new Chart(document.getElementById("counted"), { type: "bar", data: { labels: [], datasets: [] },
+  options: opts({ scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } }, plugins: { legend: { position: "bottom" } } }) });
+
+const kpi = (l, v, s = "") => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${s}</div></div>`;
+
+async function refresh() {
+  const [a, s] = await Promise.all([fetch("/api/analytics").then((r) => r.json()), fetch("/api/state").then((r) => r.json())]);
+  const first = a.history[a.lanes[0].id] || [];
+  trend.data.labels = first.map(([t]) => new Date(t * 1000).toLocaleTimeString("en-GB"));
+  trend.data.datasets = a.lanes.map((l, i) => ({ label: `${l.name} · ${l.direction}`, data: (a.history[l.id] || []).map(([, c]) => c),
+    borderColor: LANE_COLORS[i], backgroundColor: LANE_COLORS[i] + "22", borderWidth: 2, tension: 0.3, fill: false }));
+  trend.update();
+  mix.data.datasets[0].data = ["car", "motorcycle", "bus", "truck"].map((c) => a.class_seen[c]);
+  mix.update();
+
+  const avg = {}, n = {};
+  a.signal_history.forEach((h) => { avg[h.lane] = (avg[h.lane] || 0) + h.green; n[h.lane] = (n[h.lane] || 0) + 1; });
+  green.data.labels = a.lanes.map((l) => l.direction);
+  green.data.datasets[0].data = a.lanes.map((l) => (n[l.id] ? +(avg[l.id] / n[l.id]).toFixed(1) : 0));
+  green.update();
+
+  counted.data.labels = a.lanes.map((l) => l.direction);
+  counted.data.datasets = ["car", "motorcycle", "bus", "truck"].map((c) => ({ label: c, backgroundColor: CLASS_COLORS[c],
+    data: s.lanes.map((l) => l.class_seen[c]) }));
+  counted.update();
+
+  const total = Object.values(a.class_seen).reduce((x, y) => x + y, 0);
+  const phases = a.signal_history.length;
+  const avgGreen = phases ? (a.signal_history.reduce((x, h) => x + h.green, 0) / phases).toFixed(1) : "—";
+  const busiest = s.lanes.reduce((m, l) => (l.vehicles_seen > m.vehicles_seen ? l : m), s.lanes[0]);
+  document.getElementById("aKpis").innerHTML =
+    kpi("Vehicles counted", total.toLocaleString(), `in ${Math.max(1, Math.round(s.uptime_s / 60))} min`) +
+    kpi("Flow rate", Math.round(total / Math.max(s.uptime_s, 1) * 3600).toLocaleString(), "vehicles per hour, all approaches") +
+    kpi("Busiest approach", busiest.direction, `${busiest.vehicles_seen} vehicles`) +
+    kpi("Signal phases issued", phases, `avg green ${avgGreen} s`) +
+    kpi("Incidents", s.incidents_total, s.active_incidents ? `${s.active_incidents} active` : "none active");
+}
+
+async function loadPerf() {
+  const rows = await (await fetch("/api/performance")).json();
+  const label = { low: "Low", medium: "Medium", high: "High", rush: "Rush hour" };
+  document.getElementById("perfBody").innerHTML = rows.map((r) => {
+    const best = Math.min(r.adaptive, r.ai);
+    return `<tr><td>${label[r.scenario]}</td><td class="num">${r.fixed} s</td><td class="num">${r.adaptive} s</td><td class="num">${r.ai} s</td>
+      <td class="num saving">${Math.round((100 * (r.fixed - best)) / r.fixed)}%</td></tr>`;
+  }).join("");
+  new Chart(document.getElementById("perf"), { type: "bar",
+    data: { labels: rows.map((r) => label[r.scenario]), datasets: [
+      { label: "Fixed-time", data: rows.map((r) => r.fixed), backgroundColor: "#5b6776", borderRadius: 4 },
+      { label: "Adaptive", data: rows.map((r) => r.adaptive), backgroundColor: "#3d8bfd", borderRadius: 4 },
+      { label: "AI (RL)", data: rows.map((r) => r.ai), backgroundColor: "#2fe36b", borderRadius: 4 }] },
+    options: opts({ scales: { y: { type: "logarithmic", title: { display: true, text: "avg wait (s), log scale" } } }, plugins: { legend: { position: "bottom" } } }) });
+}
+
+refresh(); loadPerf();
+setInterval(refresh, 3000);
+</script>
+{% endblock %}

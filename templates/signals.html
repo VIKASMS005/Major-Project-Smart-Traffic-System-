@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Signal Timing{% endblock %}
+{% block heading %}Signal Timing{% endblock %}
+{% block content %}
+<div class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">How green time is decided</div></div>
+    <p class="muted" style="margin-top:0;line-height:1.6">When an approach's turn comes, the controller reads the live vehicle count from its camera and sets</p>
+    <div style="font-size:18px;font-weight:600;padding:10px 14px;background:var(--panel-2);border-radius:8px;display:inline-block" id="formula">green = 10 s + 2 s × vehicles &nbsp;(10–60 s)</div>
+    <p class="muted" style="line-height:1.6">followed by <b id="yel">3</b> s yellow and <b id="red">1</b> s all-red clearance. Approaches with an active incident are skipped until the lane clears.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Next phases</div></div>
+    <div class="phase-bar" id="queue"></div>
+    <div class="muted small" style="margin-top:12px">Green times shown are what each approach would get from its current vehicle count.</div>
+  </div>
+</div>
+<div class="panel">
+  <div class="panel-head"><div class="panel-title">Phase log</div><span class="muted small">every green phase issued by the controller</span></div>
+  <table>
+    <thead><tr><th>Time</th><th>Approach</th><th class="num">Vehicles waiting</th><th class="num">Green given</th><th>Fixed-time would give</th></tr></thead>
+    <tbody id="log"></tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function refresh() {
+  const [a, s, cfg] = await Promise.all(["/api/analytics", "/api/state", "/api/settings"].map((u) => fetch(u).then((r) => r.json())));
+  document.getElementById("formula").innerHTML = `green = ${cfg.base_time} s + ${cfg.per_vehicle_time} s × vehicles &nbsp;(${cfg.min_green}–${cfg.max_green} s)`;
+  document.getElementById("yel").textContent = cfg.yellow_time;
+  document.getElementById("red").textContent = cfg.all_red_time;
+  const byId = Object.fromEntries(s.lanes.map((l) => [l.id, l]));
+  const sig = s.signal;
+  const order = [sig.active_lane, ...(sig.upcoming || []).filter((x) => x !== sig.active_lane)].filter(Boolean);
+  document.getElementById("queue").innerHTML = order.map((id, i) => {
+    const l = byId[id];
+    const on = i === 0 && sig.phase !== "ALL_RED";
+    return `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""}">${on ? "NOW" : "Next " + i} · ${l.direction}
+      <b>${on ? Math.ceil(sig.remaining) + " s left" : l.green_time + " s"}</b></div>`;
+  }).join("") + s.lanes.filter((l) => l.blocked).map((l) => `<div class="seg blocked">${l.direction}<b>SKIPPED</b></div>`).join("");
+  const nameOf = (id) => `${byId[id].name} · ${byId[id].direction}`;
+  document.getElementById("log").innerHTML = a.signal_history.slice(0, 40).map((h) => `<tr><td>${h.time}</td><td>${nameOf(h.lane)}</td>
+    <td class="num">${h.count}</td><td class="num"><b>${h.green} s</b></td><td class="muted">30 s regardless of traffic</td></tr>`).join("")
+    || `<tr><td colspan="5" class="muted">Waiting for the first phase…</td></tr>`;
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+{% endblock %}
