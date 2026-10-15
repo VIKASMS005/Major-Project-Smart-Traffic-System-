@@ -53,3 +53,23 @@ Outputs go to `results/`; `results/summary.md` has every headline number.
   **RL**: tabular Q-learning; state = (phase, NS density level, EW density level), action = green duration
   {10, 15, 20, 30, 45, 60 s}, reward = − waiting time accumulated, trained for 400 simulated hours.
 * Metrics: average waiting time per vehicle, average / max queue, vehicles served. 5 random seeds per scenario.
+
+## Deploy online (free, Streamlit Community Cloud)
+
+1. Push this repo to GitHub.
+2. Go to https://share.streamlit.io, sign in with GitHub, click **Create app** and choose
+   **Deploy a public app from GitHub**.
+3. Repository: this repo, branch `main`, main file `app.py`. Under **Advanced settings** pick Python 3.11.
+4. Click **Deploy**. The first build takes a few minutes. `packages.txt` installs the system libraries
+   OpenCV needs, and `requirements.txt` installs CPU-only PyTorch.
+
+On the free tier, use `yolov8n.pt` at 640 px in the Live detection tab for speed.
+
+## Open in VS Code
+
+```bash
+git clone https://github.com/VIKASMS005/Major-Project-Smart-Traffic-System-.git
+cd Major-Project-Smart-Traffic-System-
+code .
+```
+Then in the VS Code terminal, run the Setup and `streamlit run app.py` steps above.

@@ -1,5 +1,9 @@
+# CPU-only PyTorch keeps the install small (works on any laptop and on Streamlit Cloud)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 ultralytics>=8.3
-opencv-python
+opencv-python-headless
 numpy
 pandas
 matplotlib
