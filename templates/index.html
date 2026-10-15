@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Traffic Management</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚦</text></svg>">
+  <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">🚦</span>
+    <div>
+      <h1>AI-Enabled Intelligent System for Smart Road Traffic Management</h1>
+      <p>YOLOv8 vehicle detection · density estimation · adaptive signal control · reinforcement learning · incident detection</p>
+    </div>
+  </div>
+  <nav>
+    <button class="tab active" data-tab="live">Live detection</button>
+    <button class="tab" data-tab="sim">Signal control simulation</button>
+    <button class="tab" data-tab="results">Results</button>
+    <button class="tab" data-tab="about">How it works</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============================== LIVE ============================== -->
+  <section id="live" class="panel active">
+    <div class="grid-live">
+      <aside class="card controls">
+        <label>Traffic video
+          <select id="video"></select>
+        </label>
+        <label class="file">Or upload your own
+          <input type="file" id="upload" accept="video/*">
+        </label>
+        <label>YOLO model
+          <select id="model">
+            <option value="yolov8n.pt">YOLOv8n (fastest)</option>
+            <option value="yolov8s.pt">YOLOv8s (more accurate)</option>
+          </select>
+        </label>
+        <label>Inference size <output id="imgszOut">640</output> px
+          <input type="range" id="imgsz" min="480" max="960" step="160" value="640">
+        </label>
+        <label>Detection confidence <output id="confOut">0.25</output>
+          <input type="range" id="conf" min="0.1" max="0.9" step="0.05" value="0.25">
+        </label>
+        <label>Lanes
+          <select id="lanes"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+        </label>
+        <label>Incident alert after stationary for <output id="stallOut">6</output> s
+          <input type="range" id="stall" min="2" max="20" step="1" value="6">
+        </label>
+        <label>Max frames (0 = whole video)
+          <input type="number" id="maxFrames" min="0" step="50" value="0">
+        </label>
+        <button id="runDetect" class="primary">▶ Run detection</button>
+      </aside>
+
+      <div class="stack">
+        <div class="card video-card">
+          <img id="stream" alt="Annotated traffic video appears here">
+          <div id="placeholder" class="placeholder">Choose a video and press <b>Run detection</b></div>
+          <div class="progress"><div id="progressBar"></div></div>
+          <div id="progressText" class="muted small"></div>
+        </div>
+        <div id="alertBox" class="alert hidden"></div>
+        <div id="liveMetrics" class="metrics"></div>
+        <div class="grid-2">
+          <div class="card"><h3>Vehicles per lane over time</h3><canvas id="laneChart" height="180"></canvas></div>
+          <div class="card"><h3>Vehicle classes detected</h3><canvas id="classChart" height="180"></canvas></div>
+        </div>
+        <div class="card"><h3>Incident alerts</h3><table id="alertTable"><thead><tr><th>Time (s)</th><th>Vehicle</th><th>Track ID</th><th>Type</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== SIM =============================== -->
+  <section id="sim" class="panel">
+    <div class="card">
+      <p>A 4-way junction (North, South, East, West) is simulated second by second for one hour.
+        The same arriving traffic is handled by three signal controllers: a conventional fixed-time signal,
+        a density-based adaptive signal, and a reinforcement learning (Q-learning) agent.</p>
+      <div class="row">
+        <label>Traffic scenario
+          <select id="scenario">
+            <option value="low">Low</option><option value="medium">Medium</option>
+            <option value="high">High</option><option value="rush" selected>Rush hour</option>
+          </select>
+        </label>
+        <label>Fixed-time green per phase <output id="fixedOut">30</output> s
+          <input type="range" id="fixedGreen" min="10" max="60" step="5" value="30">
+        </label>
+        <label>Random seed <input type="number" id="seed" value="7"></label>
+        <button id="runSim" class="primary">▶ Run simulation</button>
+      </div>
+    </div>
+    <div id="simMetrics" class="metrics"></div>
+    <div class="card"><h3>Vehicles waiting at the junction over time</h3><canvas id="queueChart" height="110"></canvas></div>
+    <div class="card"><table id="simTable"></table></div>
+  </section>
+
+  <!-- ============================ RESULTS ============================= -->
+  <section id="results" class="panel">
+    <div class="card">
+      <h2>Adaptive signal control vs fixed-time signals</h2>
+      <p class="muted">Simulated 4-way junction, 1 hour per run, averaged over 5 random seeds.</p>
+      <table id="resSignal"></table>
+    </div>
+    <div id="resSignalCharts" class="gallery"></div>
+    <h2 class="section-title">Vehicle detection on traffic videos</h2>
+    <div id="resDetection"></div>
+  </section>
+
+  <!-- ============================= ABOUT ============================== -->
+  <section id="about" class="panel">
+    <div class="card prose">
+      <h2>Pipeline</h2>
+      <ol>
+        <li><b>Data acquisition</b>: traffic camera / CCTV video, or footage you upload.</li>
+        <li><b>Preprocessing</b>: Gaussian denoising and CLAHE contrast normalisation of each frame.</li>
+        <li><b>Detection layer</b>: YOLOv8 (a CNN-based single-pass detector) finds cars, motorcycles, buses and trucks. ByteTrack gives each vehicle a persistent ID.</li>
+        <li><b>Traffic analysis layer</b>: vehicles are counted per lane, and each lane's density is classed LOW / MEDIUM / HIGH.</li>
+        <li><b>Incident detection</b>: a tracked vehicle that stays still for longer than the threshold raises an alert (possible accident, breakdown or blockage).</li>
+        <li><b>Signal optimisation layer</b>:
+          <ul>
+            <li><i>Adaptive</i>: green time = minimum green + seconds per vehicle × queue, clipped to 10–60 s.</li>
+            <li><i>Reinforcement learning</i>: a Q-learning agent observes the queue density on both approaches and chooses the green duration that minimises total waiting time. It is trained over hundreds of simulated hours.</li>
+          </ul>
+        </li>
+        <li><b>Output layer</b>: annotated video, live metrics, alerts, CSV logs and comparison charts.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<footer>Sir M. Visvesvaraya Institute of Technology · Dept. of ISE · Project BIS685</footer>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

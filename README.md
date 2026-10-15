@@ -13,7 +13,7 @@ A working prototype of the system described in the project report:
 | Traffic analysis & density (4.6) | Lane-wise counts, LOW / MEDIUM / HIGH density | `src/detector.py` |
 | Incident detection (Objective 3) | Alert when a tracked vehicle stays stationary too long | `src/detector.py` |
 | Signal optimisation (4.7) | Density-based adaptive timing + Q-learning RL agent, compared with fixed-time signals on a simulated 4-way junction | `src/simulation.py` |
-| Output layer | Streamlit dashboard, annotated videos, CSV logs, charts | `app.py`, `run_experiments.py` |
+| Output layer | Flask web app (live video stream, charts, alerts), annotated videos, CSV logs | `server.py`, `templates/`, `static/`, `run_experiments.py` |
 
 ## Setup
 
@@ -26,13 +26,19 @@ pip install -r requirements.txt
 YOLOv8 weights are in `models/` (`yolov8n.pt` fast, `yolov8s.pt` more accurate; Ultralytics downloads them if missing).
 Sample videos are in `data/`.
 
-## Run the demo dashboard
+## Run the web app
 
 ```bash
-streamlit run app.py
+python server.py
 ```
 
-Opens in the browser with four tabs: **Live detection**, **Signal control simulation**, **Results**, **How it works**.
+Then open **http://localhost:5000** in the browser. The site has four sections:
+
+* **Live detection**: pick a sample video or upload one. The annotated stream plays in the page, with
+  per-lane counts, density, green time, a vehicles-per-lane chart, class counts and incident alerts.
+* **Signal control simulation**: run fixed-time vs adaptive vs RL control on a 4-way junction.
+* **Results**: the saved experiment tables, charts and annotated videos.
+* **How it works**: the pipeline explained.
 
 ## Regenerate all results (charts, tables, annotated videos)
 
@@ -54,17 +60,6 @@ Outputs go to `results/`; `results/summary.md` has every headline number.
   {10, 15, 20, 30, 45, 60 s}, reward = − waiting time accumulated, trained for 400 simulated hours.
 * Metrics: average waiting time per vehicle, average / max queue, vehicles served. 5 random seeds per scenario.
 
-## Deploy online (free, Streamlit Community Cloud)
-
-1. Push this repo to GitHub.
-2. Go to https://share.streamlit.io, sign in with GitHub, click **Create app** and choose
-   **Deploy a public app from GitHub**.
-3. Repository: this repo, branch `main`, main file `app.py`. Under **Advanced settings** pick Python 3.11.
-4. Click **Deploy**. The first build takes a few minutes. `packages.txt` installs the system libraries
-   OpenCV needs, and `requirements.txt` installs CPU-only PyTorch.
-
-On the free tier, use `yolov8n.pt` at 640 px in the Live detection tab for speed.
-
 ## Open in VS Code
 
 ```bash
@@ -72,4 +67,4 @@ git clone https://github.com/VIKASMS005/Major-Project-Smart-Traffic-System-.git
 cd Major-Project-Smart-Traffic-System-
 code .
 ```
-Then in the VS Code terminal, run the Setup and `streamlit run app.py` steps above.
+Then in the VS Code terminal, run the Setup steps above and `python server.py`.

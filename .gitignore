@@ -3,3 +3,4 @@ __pycache__/
 venv/
 .venv/
 results/detection/*_tmp.mp4
+uploads/
