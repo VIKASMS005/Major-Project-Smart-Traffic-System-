@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Upload Video{% endblock %}
+{% block heading %}Upload Traffic Video{% endblock %}
+{% block content %}
+<div class="grid-3">
+  <div>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="video/*" hidden>
+      <svg viewBox="0 0 24 24"><path d="M11 16V7.8L8.4 10.4 7 9l5-5 5 5-1.4 1.4L13 7.8V16zm-6 4a2 2 0 0 1-2-2v-3h2v3h14v-3h2v3a2 2 0 0 1-2 2z"/></svg>
+      <h2 id="dropTitle">Drop a traffic video here, or click to choose</h2>
+      <div class="muted" id="dropSub">MP4, AVI, MOV, MKV or WEBM, from a CCTV or elevated camera over the road or junction</div>
+      <div class="progress hidden" id="prog"><div id="progBar"></div></div>
+    </label>
+    <div class="steps">
+      <div class="step"><div class="n">STEP 1</div><b>Learn the road</b><span class="muted small">Vehicles are tracked for the first <span id="learnS">{{ engine.settings.learn_seconds }}</span> s. Their paths reveal the traffic directions and the lanes.</span></div>
+      <div class="step"><div class="n">STEP 2</div><b>Detect and classify</b><span class="muted small">Every vehicle is detected and classed as 2-wheeler, 3-wheeler, 4-wheeler or heavy vehicle.</span></div>
+      <div class="step"><div class="n">STEP 3</div><b>Measure density</b><span class="muted small">Each lane's load is measured in passenger car units, so a bus counts for more than a scooter.</span></div>
+      <div class="step"><div class="n">STEP 4</div><b>Control signals</b><span class="muted small">Green time follows the measured load, and a direction with a stalled vehicle is skipped.</span></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">Videos on this system</div></div>
+    <div class="vid-list" id="vids"><div class="empty">No videos yet.</div></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const drop = document.getElementById("drop"), file = document.getElementById("file");
+["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (ev) => { if (ev.dataTransfer.files[0]) upload(ev.dataTransfer.files[0]); });
+file.addEventListener("change", () => { if (file.files[0]) upload(file.files[0]); });
+
+function upload(f) {
+  const fd = new FormData(); fd.append("video", f);
+  const xhr = new XMLHttpRequest();
+  document.getElementById("prog").classList.remove("hidden");
+  document.getElementById("dropTitle").textContent = `Uploading ${f.name}`;
+  xhr.upload.onprogress = (e) => {
+    const p = e.lengthComputable ? (100 * e.loaded) / e.total : 0;
+    document.getElementById("progBar").style.width = p + "%";
+    document.getElementById("dropSub").textContent = `${(e.loaded / 1e6).toFixed(1)} of ${(e.total / 1e6).toFixed(1)} MB`;
+  };
+  xhr.onload = () => {
+    const r = JSON.parse(xhr.responseText || "{}");
+    if (xhr.status === 200) { location.href = "/"; return; }
+    document.getElementById("dropTitle").textContent = r.error || "Upload failed";
+    document.getElementById("dropSub").textContent = "Try another file.";
+  };
+  xhr.onerror = () => { document.getElementById("dropTitle").textContent = "Upload failed"; };
+  xhr.open("POST", "/api/upload"); xhr.send(fd);
+}
+
+async function analyse(name, kind) {
+  await fetch("/api/analyse", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, kind }) });
+  location.href = "/";
+}
+
+async function loadVideos() {
+  const list = await (await fetch("/api/videos")).json();
+  const box = document.getElementById("vids");
+  if (!list.length) return;
+  box.innerHTML = list.map((v) => {
+    const shown = v.name.replace(/^\d{8}_\d{6}_/, "");
+    const when = new Date(v.modified * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+    return `<div class="vid"><div><b>${shown}</b>${v.kind === "sample" ? '<span class="tag">SAMPLE</span>' : ""}
+      <div class="muted small">${v.size_mb} MB · ${v.kind === "upload" ? "uploaded " + when : "sample clip"}</div></div>
+      <button class="btn sm ghost" onclick='analyse(${JSON.stringify(v.name)}, "${v.kind}")'>Analyse</button></div>`;
+  }).join("");
+}
+loadVideos();
+</script>
+{% endblock %}

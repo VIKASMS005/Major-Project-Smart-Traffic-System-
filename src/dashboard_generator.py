@@ -45,21 +45,24 @@ canvas{width:100%;aspect-ratio:1;display:block;border-radius:10px}
 @media(max-width:900px){main{grid-template-columns:1fr}.cards{grid-template-columns:1fr}}
 </style></head><body>
 <header><div><div class="muted" style="font-size:12px;letter-spacing:.8px">ADAPTIVE SIGNAL PLAN FROM VIDEO ANALYSIS</div>
-<h1>Traffic Light Simulator</h1></div><div class="muted" id="cycle">Cycle 1</div></header>
+<h1>Traffic Light Simulator</h1><div class="muted" style="font-size:12px">__TITLE__</div></div><div class="muted" id="cycle">Cycle 1</div></header>
 <main><div class="panel"><canvas id="junction"></canvas></div><div class="cards" id="cards"></div></main>
 <script>__JUNCTION_JS__</script>
 <script>
 const PLAN = __PLAN__;
-const YELLOW = 3;
-const view = new JunctionView(document.getElementById("junction"));
+const YELLOW = __YELLOW__;
+// the junction drawing needs one approach per side; otherwise show the signal cards only
+const SHOW_J = PLAN.length <= 4 && new Set(PLAN.map(l => l.direction)).size === PLAN.length;
+const view = SHOW_J ? new JunctionView(document.getElementById("junction")) : { update() {} };
+if (!SHOW_J) { document.querySelector("main > .panel").style.display = "none"; document.querySelector("main").style.gridTemplateColumns = "1fr"; }
 const cards = document.getElementById("cards");
 cards.innerHTML = PLAN.map(l => `
  <div class="card" id="card-${l.id}">
-  <div class="top"><div class="name">${l.name} <span class="muted" style="font-weight:500">${l.direction}</span></div>
+  <div class="top"><div class="name">${l.name}</div>
    <div class="lamps"><i class="r"></i><i class="y"></i><i class="g"></i></div></div>
-  <div class="stats"><div>Vehicles<b>${l.count}</b></div><div>Density<b><span class="badge ${l.density}">${l.density}</span></b></div>
+  <div class="stats"><div>Avg vehicles<b>${l.count}</b></div><div>Density<b><span class="badge ${l.density}">${l.density}</span></b></div>
    <div>Green time<b>${l.incident ? "skipped" : l.green_time + " s"}</b></div></div>
-  <div class="mix">${Object.entries(l.by_type).filter(([,v]) => v).map(([k,v]) => v + " " + k).join(" · ") || "no vehicles"}</div>
+  <div class="mix">Counted: ${Object.entries(l.by_type).filter(([,v]) => v).map(([k,v]) => v + " " + k).join(" · ") || "no vehicles"} · avg ${l.pcu} PCU</div>
   <div class="status" id="st-${l.id}"></div></div>`).join("");
 
 const order = PLAN.filter(l => !l.incident);
@@ -96,7 +99,7 @@ start(); setInterval(tick, 200); tick();
 """
 
 
-def generate_dashboard(lane_results: list[dict], out_path: str) -> str:
+def generate_dashboard(lane_results: list[dict], out_path: str, yellow: float = 3, title: str = "") -> str:
     """Write the simulator HTML.
 
     lane_results: one dict per lane with keys
@@ -105,6 +108,7 @@ def generate_dashboard(lane_results: list[dict], out_path: str) -> str:
     with open(os.path.join(ROOT, "static", "junction.js"), encoding="utf-8") as f:
         junction_js = f.read()
     html = TEMPLATE.replace("__JUNCTION_JS__", junction_js).replace("__PLAN__", json.dumps(lane_results))
+    html = html.replace("__YELLOW__", json.dumps(yellow)).replace("__TITLE__", title)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)

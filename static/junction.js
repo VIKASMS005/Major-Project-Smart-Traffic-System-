@@ -8,8 +8,10 @@
  * light is one of GREEN | YELLOW | RED | BLOCKED.
  */
 (function () {
-  const CAR_COLORS = { car: ["#e8eaed", "#4dabf7", "#adb5bd", "#f06595", "#ffd43b"], motorcycle: ["#ffa94d"],
-    bus: ["#fab005"], truck: ["#9775fa"] };
+  // 2W two-wheelers, 3W auto-rickshaws, 4W cars, HV heavy vehicles (buses, trucks)
+  const CAR_COLORS = { "4W": ["#e8eaed", "#4dabf7", "#adb5bd", "#f06595", "#ffd43b"], "2W": ["#ffa94d"],
+    "3W": ["#c8e639"], HV: ["#fab005", "#9775fa"] };
+  const SIZE = { "2W": [7, 12], "3W": [11, 16], "4W": [14, 22], HV: [16, 34] };   // width, length
   const LAMP = { GREEN: "#2fe36b", YELLOW: "#ffc61a", RED: "#ff3b3b", BLOCKED: "#ff3b3b" };
 
   // geometry per approach: where the queue sits and which way traffic moves
@@ -26,9 +28,9 @@
 
   function vehiclePalette(byType, n) {
     const list = [];
-    const t = byType || { car: n };
-    ["bus", "truck", "motorcycle", "car"].forEach((k) => { for (let i = 0; i < (t[k] || 0); i++) list.push(k); });
-    while (list.length < n) list.push("car");
+    const t = byType || { "4W": n };
+    ["HV", "3W", "2W", "4W"].forEach((k) => { for (let i = 0; i < (t[k] || 0); i++) list.push(k); });
+    while (list.length < n) list.push("4W");
     // interleave so big vehicles are not all at the front
     return list.sort((a, b) => ((a.charCodeAt(0) * 7 + b.length) % 3) - 1).slice(0, n);
   }
@@ -93,7 +95,7 @@
         // queued vehicles behind the stop line
         let offset = 30;
         kinds.forEach((k, i) => {
-          const len = k === "bus" || k === "truck" ? 34 : k === "motorcycle" ? 12 : 22;
+          const len = SIZE[k][1];
           const x = a.x - a.dx * (offset + len / 2), y = a.y - a.dy * (offset + len / 2);
           this.drawVehicle(x, y, a.rot, k, i);
           offset += len + 6;
@@ -102,7 +104,7 @@
         if (ln.light === "GREEN" && queue > 0 && now - (this.lastSpawn[ln.id] || 0) > 900) {
           this.lastSpawn[ln.id] = now;
           this.moving.push({ x: a.x - a.dx * 20, y: a.y - a.dy * 20, dx: a.dx, dy: a.dy, rot: a.rot,
-            kind: kinds[0] || "car", seed: Math.floor(now) % 5 });
+            kind: kinds[0] || "4W", seed: Math.floor(now) % 5 });
         }
         this.drawSignal(ln, c, r);
       });
@@ -122,7 +124,7 @@
         ctx.fillText(Math.ceil(this.state.remaining || 0) + "s", c, c - 6);
         ctx.font = "600 10px Inter, Segoe UI, sans-serif";
         ctx.fillStyle = "#cfd8e3";
-        ctx.fillText(act.direction.toUpperCase(), c, c + 14);
+        ctx.fillText((act.label || act.direction).toUpperCase(), c, c + 14);
       } else {
         ctx.fillStyle = "#ff6b6b"; ctx.font = "bold 12px Inter, Segoe UI, sans-serif";
         ctx.fillText("ALL RED", c, c);
@@ -137,17 +139,16 @@
 
     drawVehicle(x, y, rot, kind, seed) {
       const ctx = this.ctx;
-      const w = kind === "motorcycle" ? 7 : kind === "bus" || kind === "truck" ? 16 : 14;
-      const l = kind === "bus" || kind === "truck" ? 34 : kind === "motorcycle" ? 12 : 22;
-      const pal = CAR_COLORS[kind] || CAR_COLORS.car;
+      const [w, l] = SIZE[kind] || SIZE["4W"];
+      const pal = CAR_COLORS[kind] || CAR_COLORS["4W"];
       ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
       ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.fillRect(-w / 2 + 2, -l / 2 + 2, w, l);
       ctx.fillStyle = pal[seed % pal.length];
       ctx.beginPath(); ctx.roundRect(-w / 2, -l / 2, w, l, 3); ctx.fill();
-      if (kind !== "motorcycle") {
+      if (kind !== "2W") {
         ctx.fillStyle = "rgba(20,30,45,0.85)";
-        ctx.fillRect(-w / 2 + 2, -l / 2 + 4, w - 4, kind === "car" ? 5 : 4);
-        if (kind === "car") ctx.fillRect(-w / 2 + 2, l / 2 - 7, w - 4, 4);
+        ctx.fillRect(-w / 2 + 2, -l / 2 + 4, w - 4, kind === "4W" ? 5 : 4);
+        if (kind === "4W") ctx.fillRect(-w / 2 + 2, l / 2 - 7, w - 4, 4);
       }
       ctx.restore();
     }

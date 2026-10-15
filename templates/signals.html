@@ -5,20 +5,22 @@
 <div class="grid-2">
   <div class="panel">
     <div class="panel-head"><div class="panel-title">How green time is decided</div></div>
-    <p class="muted" style="margin-top:0;line-height:1.6">When an approach's turn comes, the controller reads the live vehicle count from its camera and sets</p>
-    <div style="font-size:18px;font-weight:600;padding:10px 14px;background:var(--panel-2);border-radius:8px;display:inline-block" id="formula">green = 10 s + 2 s × vehicles &nbsp;(10–60 s)</div>
-    <p class="muted" style="line-height:1.6">followed by <b id="yel">3</b> s yellow and <b id="red">1</b> s all-red clearance. Approaches with an active incident are skipped until the lane clears.</p>
+    <p class="muted" style="margin-top:0;line-height:1.6" id="intro">&nbsp;</p>
+    <div style="font-size:18px;font-weight:600;padding:10px 14px;background:var(--panel-2);border-radius:8px;display:inline-block" id="formula">&nbsp;</div>
+    <p class="muted" style="line-height:1.6" id="after">&nbsp;</p>
+    <table style="margin-top:6px"><thead><tr><th>Vehicle type</th><th>Examples</th><th class="num">PCU</th></tr></thead>
+      <tbody>{% for c, n in categories.items() %}<tr><td>{{ n }}</td><td class="muted">{{ category_hint[c] }}</td><td class="num">{{ pcu[c] }}</td></tr>{% endfor %}</tbody></table>
   </div>
   <div class="panel">
-    <div class="panel-head"><div class="panel-title">Next phases</div></div>
-    <div class="phase-bar" id="queue"></div>
-    <div class="muted small" style="margin-top:12px">Green times shown are what each approach would get from its current vehicle count.</div>
+    <div class="panel-head"><div class="panel-title">Phase order</div></div>
+    <div class="phase-bar" id="queue" style="flex-wrap:wrap"></div>
+    <div class="muted small" style="margin-top:12px">Green times shown are what each group would get from the load measured right now.</div>
   </div>
 </div>
 <div class="panel">
   <div class="panel-head"><div class="panel-title">Phase log</div><span class="muted small">every green phase issued by the controller</span></div>
   <table>
-    <thead><tr><th>Time</th><th>Approach</th><th class="num">Vehicles waiting</th><th class="num">Green given</th><th>Fixed-time would give</th></tr></thead>
+    <thead><tr><th>Time</th><th>Signal group</th><th class="num">Load (PCU)</th><th class="num">Green given</th><th class="num">vs 30 s fixed-time</th></tr></thead>
     <tbody id="log"></tbody>
   </table>
 </div>
@@ -26,23 +28,30 @@
 {% block scripts %}
 <script>
 async function refresh() {
-  const [a, s, cfg] = await Promise.all(["/api/analytics", "/api/state", "/api/settings"].map((u) => fetch(u).then((r) => r.json())));
-  document.getElementById("formula").innerHTML = `green = ${cfg.base_time} s + ${cfg.per_vehicle_time} s × vehicles &nbsp;(${cfg.min_green}–${cfg.max_green} s)`;
-  document.getElementById("yel").textContent = cfg.yellow_time;
-  document.getElementById("red").textContent = cfg.all_red_time;
-  const byId = Object.fromEntries(s.lanes.map((l) => [l.id, l]));
-  const sig = s.signal;
+  const [a, s] = await Promise.all(["/api/analytics", "/api/state"].map((u) => fetch(u).then((r) => r.json())));
+  if (s.status === "empty") { location.href = "/upload"; return; }
+  const cfg = s.settings;
+  const unit = s.group_mode === "approach" ? "approach" : "lane";
+  document.getElementById("intro").textContent = s.status !== "live" ? "Signals start once the lanes are learned." :
+    `The video shows ${s.n_streams} traffic direction${s.n_streams === 1 ? "" : "s"} with ${s.lanes.length} lanes, so each ${unit} is a signal group. ` +
+    `When a group's turn comes, the controller reads the live load of its lanes in passenger car units (PCU) and sets`;
+  document.getElementById("formula").innerHTML = `green = ${cfg.base_time} s + ${cfg.per_vehicle_time} s × PCU &nbsp;(${cfg.min_green}–${cfg.max_green} s)`;
+  document.getElementById("after").innerHTML = `followed by <b>${cfg.yellow_time} s</b> yellow and <b>${cfg.all_red_time} s</b> all-red clearance. ` +
+    `A group with a stationary vehicle is skipped until it clears.`;
+  const byId = Object.fromEntries(s.groups.map((g) => [g.id, g]));
+  const sig = s.signal || {};
   const order = [sig.active_lane, ...(sig.upcoming || []).filter((x) => x !== sig.active_lane)].filter(Boolean);
   document.getElementById("queue").innerHTML = order.map((id, i) => {
-    const l = byId[id];
+    const g = byId[id];
     const on = i === 0 && sig.phase !== "ALL_RED";
-    return `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""}">${on ? "NOW" : "Next " + i} · ${l.direction}
-      <b>${on ? Math.ceil(sig.remaining) + " s left" : l.green_time + " s"}</b></div>`;
-  }).join("") + s.lanes.filter((l) => l.blocked).map((l) => `<div class="seg blocked">${l.direction}<b>SKIPPED</b></div>`).join("");
-  const nameOf = (id) => `${byId[id].name} · ${byId[id].direction}`;
-  document.getElementById("log").innerHTML = a.signal_history.slice(0, 40).map((h) => `<tr><td>${h.time}</td><td>${nameOf(h.lane)}</td>
-    <td class="num">${h.count}</td><td class="num"><b>${h.green} s</b></td><td class="muted">30 s regardless of traffic</td></tr>`).join("")
-    || `<tr><td colspan="5" class="muted">Waiting for the first phase…</td></tr>`;
+    return `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""}">${on ? "NOW" : "Next " + i} · ${g.name.replace(" approach", "")}
+      <b>${on ? Math.ceil(sig.remaining) + " s left" : g.green_time + " s"}</b></div>`;
+  }).join("") + s.groups.filter((g) => g.blocked).map((g) => `<div class="seg blocked">${g.name}<b>SKIPPED</b></div>`).join("");
+  document.getElementById("log").innerHTML = a.signal_history.slice(0, 40).map((h) => {
+    const d = h.green - 30;
+    return `<tr><td>${h.time}</td><td>${h.name}</td><td class="num">${(+h.pcu).toFixed(1)}</td><td class="num"><b>${h.green} s</b></td>
+    <td class="num ${d < 0 ? "saving" : ""}">${d > 0 ? "+" : ""}${d} s</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">Waiting for the first phase…</td></tr>`;
 }
 refresh(); setInterval(refresh, 1000);
 </script>

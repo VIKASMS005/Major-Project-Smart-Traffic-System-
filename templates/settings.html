@@ -6,15 +6,15 @@
 <div class="settings">
   <div class="panel">
     <div class="panel-title" style="margin-bottom:14px">Density thresholds</div>
-    <div class="field"><label>Low density up to <output></output></label><input type="range" name="low_max" min="1" max="20">
-      <div class="help">vehicles in view of the camera</div></div>
-    <div class="field"><label>Medium density up to <output></output></label><input type="range" name="medium_max" min="2" max="40">
+    <div class="field"><label>Low density up to <output></output></label><input type="range" name="low_max" min="1" max="30">
+      <div class="help">load of one signal group, in passenger car units (a car is 1, a bike 0.5, a bus 3); per-lane levels divide this by the lanes in the group</div></div>
+    <div class="field"><label>Medium density up to <output></output></label><input type="range" name="medium_max" min="2" max="60">
       <div class="help">more than this is High density</div></div>
   </div>
   <div class="panel">
     <div class="panel-title" style="margin-bottom:14px">Signal timing</div>
     <div class="field"><label>Base green time <output></output></label><input type="range" name="base_time" min="0" max="30"></div>
-    <div class="field"><label>Extra green per vehicle <output></output></label><input type="range" name="per_vehicle_time" min="0" max="6" step="0.5"></div>
+    <div class="field"><label>Extra green per PCU <output></output></label><input type="range" name="per_vehicle_time" min="0" max="6" step="0.5"></div>
     <div class="field"><label>Minimum green <output></output></label><input type="range" name="min_green" min="5" max="30"></div>
     <div class="field"><label>Maximum green <output></output></label><input type="range" name="max_green" min="20" max="120" step="5"></div>
     <div class="field"><label>Yellow time <output></output></label><input type="range" name="yellow_time" min="2" max="6"></div>
@@ -23,11 +23,17 @@
   <div class="panel">
     <div class="panel-title" style="margin-bottom:14px">Detection and incidents</div>
     <div class="field"><label>Detection confidence <output></output></label><input type="range" name="confidence" min="0.1" max="0.9" step="0.05"></div>
-    <div class="field"><label>Run detection every <output></output></label><input type="range" name="detect_every" min="1" max="15">
-      <div class="help">frames per camera; higher is lighter on the CPU</div></div>
-    <div class="field"><label>Incident after stationary for <output></output></label><input type="range" name="stationary_frames" min="25" max="500" step="5">
-      <div class="help">frames (25 frames = 1 second)</div></div>
-    <div class="field"><label>Keep lane blocked after it clears <output></output></label><input type="range" name="incident_hold_s" min="0" max="30"></div>
+    <div class="field"><label>Run detection every <output></output></label><input type="range" name="detect_every" min="1" max="10">
+      <div class="help">video frames; higher is lighter on the CPU</div></div>
+    <div class="field"><label>Incident after stationary for <output></output></label><input type="range" name="stationary_s" min="2" max="30">
+      <div class="help">while other traffic in the same direction keeps moving</div></div>
+    <div class="field"><label>Keep group blocked after it clears <output></output></label><input type="range" name="incident_hold_s" min="0" max="30"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title" style="margin-bottom:14px">Lane learning</div>
+    <div class="field"><label>Learn lanes from the first <output></output></label><input type="range" name="learn_seconds" min="5" max="60">
+      <div class="help">seconds of video. Longer finds quiet lanes too. Applies the next time lanes are learned.</div></div>
+    <button class="btn ghost" type="button" id="relearn">Re-learn lanes for the current video</button>
   </div>
 </div>
 <div style="display:flex;gap:10px;margin-top:18px">
@@ -40,7 +46,7 @@
 {% block scripts %}
 <script>
 const UNITS = { base_time: " s", per_vehicle_time: " s", min_green: " s", max_green: " s", yellow_time: " s", all_red_time: " s",
-  incident_hold_s: " s", detect_every: " frames", stationary_frames: " frames", low_max: " vehicles", medium_max: " vehicles", confidence: "" };
+  incident_hold_s: " s", detect_every: " frames", stationary_s: " s", low_max: " PCU", medium_max: " PCU", confidence: "", learn_seconds: " s" };
 const form = document.getElementById("form");
 function show(inp) { inp.parentElement.querySelector("output").textContent = inp.value + UNITS[inp.name]; }
 function fill(cfg) {
@@ -60,5 +66,11 @@ form.addEventListener("submit", (e) => {
 });
 document.getElementById("reset").addEventListener("click", () => save({ reset: true }));
 fetch("/api/settings").then((r) => r.json()).then(fill);
+document.getElementById("relearn").addEventListener("click", async () => {
+  const body = { learn_seconds: +form.querySelector("[name=learn_seconds]").value };
+  await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  await fetch("/api/relearn", { method: "POST" });
+  location.href = "/";
+});
 </script>
 {% endblock %}

@@ -1,125 +1,131 @@
 """
 AI-Enabled Intelligent System for Smart Road Traffic Management: batch pipeline.
 
-Processes one pre-recorded video per lane (sample_videos/lane1.mp4 ... lane4.mp4),
-prints the adaptive signal schedule, saves annotated videos to outputs/ and opens
-the junction simulator (outputs/traffic_light_simulator.html) in the browser.
+Analyses one traffic video end to end, without the web server:
 
-    python main.py                 # all lanes found in sample_videos/
-    python main.py --no-browser    # don't open the simulator at the end
+1. Learns the lanes and traffic directions from the vehicles in the video.
+2. Detects, tracks and classifies every vehicle (2-wheeler, 3-wheeler,
+   4-wheeler, heavy vehicle) and assigns it to a lane.
+3. Prints a per-lane traffic report and the adaptive signal plan.
+4. Saves the annotated video and incident snapshots to outputs/, and opens a
+   self-contained signal simulator (outputs/traffic_light_simulator.html).
+
+    python main.py --video path/to/traffic.mp4
+    python main.py --video sample_videos/highway_sample.mp4 --no-browser
 
 For the live web control centre, run `python app.py` instead.
 """
 import argparse
-import glob
 import os
 import sys
 import time
 import webbrowser
 
 import cv2
+import numpy as np
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 from dashboard_generator import generate_dashboard  # noqa: E402
-from density_estimator import classify_density, count_by_type  # noqa: E402
-from incident_detector import IncidentDetector  # noqa: E402
+from density_estimator import classify_density, pcu_load  # noqa: E402
+from live_engine import TrafficEngine  # noqa: E402
 from signal_optimizer import compute_signal_plan  # noqa: E402
-from vehicle_detector import VehicleDetector  # noqa: E402
-
-DIRECTIONS = ["North", "East", "South", "West"]
-DETECT_EVERY = 5          # run YOLO on every 5th frame for CPU speed
-
-
-def process_lane(detector: VehicleDetector, path: str, out_path: str) -> dict:
-    """Run detection on one lane video and write the annotated copy."""
-    cap = cv2.VideoCapture(path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-    incidents = IncidentDetector()
-    dets, flagged, counts, incident_events = [], set(), [], []
-    frame_idx = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if frame_idx % DETECT_EVERY == 0:
-            dets = detector.detect(frame)
-            flagged, new = incidents.update(dets, frame_idx, h)
-            incident_events += new
-            counts.append((len(dets), count_by_type(dets)))
-        out = detector.draw(frame, dets, flagged)
-        density = classify_density(len(dets))
-        cv2.rectangle(out, (0, 0), (300, 62), (20, 20, 20), -1)
-        cv2.putText(out, f"Vehicles: {len(dets)}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(out, f"Density: {density}", (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 255), 2)
-        if incidents.active():
-            cv2.rectangle(out, (0, h - 44), (w, h), (40, 40, 200), -1)
-            cv2.putText(out, "INCIDENT DETECTED", (12, h - 13), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-        writer.write(out)
-        frame_idx += 1
-        if frame_idx % 50 == 0:
-            print(f"\r    {frame_idx}/{total} frames", end="", flush=True)
-    print(f"\r    {frame_idx}/{total} frames")
-    cap.release()
-    writer.release()
-
-    # the lane's vehicle count = average vehicles in view over the clip (rounded)
-    avg = round(sum(c for c, _ in counts) / max(len(counts), 1))
-    by_type_avg = {k: round(sum(t[k] for _, t in counts) / max(len(counts), 1))
-                   for k in ("car", "motorcycle", "bus", "truck")}
-    return {"count": avg, "peak": max((c for c, _ in counts), default=0), "by_type": by_type_avg,
-            "vehicles_counted": incidents.vehicles_counted, "incident": bool(incident_events),
-            "incident_events": len(incident_events), "output": out_path}
+from vehicle_detector import CATEGORIES  # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--videos", default=os.path.join(ROOT, "sample_videos"))
+    ap.add_argument("--video", required=True, help="traffic video to analyse")
     ap.add_argument("--outputs", default=os.path.join(ROOT, "outputs"))
+    ap.add_argument("--learn-seconds", type=float, default=20, help="video seconds used to learn the lanes")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
-
-    paths = [p for p in (os.path.join(args.videos, f"lane{i}.mp4") for i in range(1, 5)) if os.path.exists(p)]
-    if not paths:
-        sys.exit(f"No lane videos found. Put lane1.mp4 ... lane4.mp4 in {args.videos}")
+    if not os.path.exists(args.video):
+        sys.exit(f"Video not found: {args.video}")
     os.makedirs(args.outputs, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(args.video))[0]
+    out_video = os.path.join(args.outputs, f"{stem}_annotated.mp4")
 
-    print("\nLoading YOLOv8n ...")
-    detector = VehicleDetector()
-    results = []
+    print("\nLoading the detection model ...")
+    engine = TrafficEngine(os.path.join(args.outputs, "incidents"), {"learn_seconds": args.learn_seconds},
+                           realtime=False)
+    print(f"Model: {engine.detector.model_name}")
+    writer = {}
+
+    def on_frame(img):
+        if "w" not in writer:
+            h, w = img.shape[:2]
+            writer["w"] = cv2.VideoWriter(out_video, cv2.VideoWriter_fourcc(*"mp4v"), engine.fps, (w, h))
+        writer["w"].write(img)
+
+    engine.on_frame = on_frame
     t0 = time.time()
-    for path in paths:
-        lane_no = int(os.path.basename(path)[4])
-        print(f"\n[Lane {lane_no}] {os.path.basename(path)}")
-        r = process_lane(detector, path, os.path.join(args.outputs, f"lane{lane_no}_annotated.mp4"))
-        r.update(id=f"lane{lane_no}", name=f"Lane {lane_no}", direction=DIRECTIONS[(lane_no - 1) % 4],
-                 density=classify_density(r["count"]))
-        results.append(r)
+    engine.load(args.video)
+    stage = None
+    while engine.thread.is_alive():
+        s = engine.status
+        if s != stage:
+            print({"learning": "\n[1/2] Learning lanes from vehicle paths ...",
+                   "live": "\n[2/2] Detecting, tracking and counting ..."}.get(s, ""))
+            stage = s
+        if s == "learning":
+            print(f"\r      {engine.progress:5.1f}%", end="", flush=True)
+        elif s == "live" and engine.total_frames:
+            pct = 100 * engine.video_time / (engine.total_frames / engine.fps)
+            print(f"\r      {pct:5.1f}%  ({engine.vehicles_counted} vehicles counted)", end="", flush=True)
+        time.sleep(0.5)
+    if "w" in writer:
+        writer["w"].release()
+    if engine.status == "error":
+        sys.exit(f"\nError: {engine.message}")
+    print()
 
-    plan = compute_signal_plan({r["id"]: r["count"] for r in results})
-    for r in results:
-        r["green_time"] = plan[r["id"]]
+    snap = engine.snapshot()
+    duration = max(engine.video_time, 1e-6)
+    # average load of each signal group over the whole video
+    avg_pcu = {g["id"]: float(np.mean([h["groups"][g["id"]]["pcu"] for h in engine.history] or [0]))
+               for g in snap["groups"]}
+    avg_veh = {g["id"]: float(np.mean([h["groups"][g["id"]]["vehicles"] for h in engine.history] or [0]))
+               for g in snap["groups"]}
+    plan = compute_signal_plan({gid: round(v) for gid, v in avg_pcu.items()}, **engine._timing())
+    incident_groups = {i["group"] for i in engine.incidents}
+    st = engine.settings
 
-    line = "-" * 118
-    print(f"\n{line}\n  ADAPTIVE SIGNAL SCHEDULE   (green = 10 s + 2 s x vehicles, 10-60 s; incident lanes skipped)\n{line}")
-    print(f"  {'Lane':<16}{'Vehicles':>9}{'Density':>10}{'Green':>8}  {'Incident':<10}{'Cars':>6}{'Bikes':>7}{'Buses':>7}"
-          f"{'Trucks':>8}  Output video")
+    line = "-" * 112
+    print(f"\n{line}\n  VIDEO: {os.path.basename(args.video)}   {snap['video']['width']}x{snap['video']['height']}, "
+          f"{duration:.0f} s   ·   {len(snap['lanes'])} lanes in {snap['n_streams']} direction(s) detected\n{line}")
+    print(f"  {'Lane':<6}{'Direction':<22}{'2W':>6}{'3W':>6}{'4W':>6}{'HV':>6}{'Total':>8}{'Flow/min':>10}")
     print(line)
-    for r in results:
-        t = r["by_type"]
-        green = "skip" if r["incident"] else f"{r['green_time']} s"
-        print(f"  {r['name'] + ' (' + r['direction'] + ')':<16}{r['count']:>9}{r['density']:>10}{green:>8}  "
-              f"{'YES' if r['incident'] else 'no':<10}{t['car']:>6}{t['motorcycle']:>7}{t['bus']:>7}{t['truck']:>8}  "
-              f"{os.path.relpath(r['output'], ROOT)}")
-    cycle = sum(r["green_time"] + 3 for r in results if not r["incident"])
-    print(f"{line}\n  Full cycle: {cycle} s   ·   processed in {time.time() - t0:.0f} s\n")
+    for l in snap["lanes"]:
+        c = l["counted"]
+        print(f"  {l['id']:<6}{l['stream']:<22}" + "".join(f"{c[k]:>6}" for k in CATEGORIES) +
+              f"{l['counted_total']:>8}{l['counted_total'] * 60 / duration:>10.1f}")
+    print(f"{line}\n  ADAPTIVE SIGNAL PLAN   (green = {st['base_time']} s + {st['per_vehicle_time']} s x PCU, "
+          f"{st['min_green']}-{st['max_green']} s; groups with an incident are skipped)\n{line}")
+    print(f"  {'Signal group':<22}{'Lanes':<14}{'Avg veh':>8}{'Avg PCU':>9}{'Density':>10}{'Green':>8}  Incident")
+    print(line)
+    results = []
+    for g in snap["groups"]:
+        dens = classify_density(avg_pcu[g["id"]], st["low_max"], st["medium_max"])
+        inc = g["id"] in incident_groups
+        print(f"  {g['name']:<22}{', '.join(g['lanes']):<14}{avg_veh[g['id']]:>8.1f}{avg_pcu[g['id']]:>9.1f}{dens:>10}"
+              f"{('skip' if inc else str(plan[g['id']]) + ' s'):>8}  {'YES' if inc else 'no'}")
+        by = {k: 0 for k in CATEGORIES}
+        for lid in g["lanes"]:
+            for k, n in engine.lanes[lid].counted.items():
+                by[k] += n
+        results.append({"id": g["id"], "name": g["name"].replace(" approach", ""), "direction": g["compass"],
+                        "count": round(avg_veh[g["id"]]), "pcu": round(avg_pcu[g["id"]], 1), "density": dens,
+                        "by_type": by, "green_time": plan[g["id"]], "incident": inc})
+    cycle = sum(r["green_time"] + st["yellow_time"] + st["all_red_time"] for r in results if not r["incident"])
+    print(f"{line}\n  Vehicles counted: {engine.vehicles_counted}  (" +
+          ", ".join(f"{k} {v}" for k, v in snap["mix_counted"].items()) +
+          f")   ·   PCU load of the mix: {pcu_load(snap['mix_counted'])}")
+    print(f"  Incidents: {len(engine.incidents)}   ·   full signal cycle: {cycle} s   ·   processed in {time.time() - t0:.0f} s")
+    print(f"  Annotated video: {os.path.relpath(out_video, ROOT)}\n")
 
-    html = generate_dashboard([{k: r[k] for k in ("id", "name", "direction", "count", "density", "by_type",
-                                                  "green_time", "incident")} for r in results],
-                              os.path.join(args.outputs, "traffic_light_simulator.html"))
+    html = generate_dashboard(results, os.path.join(args.outputs, "traffic_light_simulator.html"),
+                              yellow=st["yellow_time"], title=os.path.basename(args.video))
     print(f"Simulator saved to {os.path.relpath(html, ROOT)}")
     if not args.no_browser:
         webbrowser.open("file://" + os.path.abspath(html))

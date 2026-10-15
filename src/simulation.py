@@ -188,3 +188,52 @@ def train_rl(episodes=300, duration=3600, scenarios=("low", "medium", "high", "r
             log(f"episode {ep + 1}: avg wait {history[-1]['avg_wait_s']:.1f}s ({sc})")
     agent.training = False
     return agent, history
+
+
+# ---------------------------------------------------------------------------
+# Comparison for the traffic measured in an uploaded video
+# ---------------------------------------------------------------------------
+def _run_groups(rates, sat, mode, timing, duration, seed, fixed_green=30):
+    """Queue simulation of N signal groups served one after another.
+
+    rates: vehicles/second arriving per group (measured from the video)
+    sat:   vehicles/second a group discharges while green
+    mode:  'fixed' (same green for every group) or 'adaptive' (green from queue)
+    """
+    rng = np.random.default_rng(seed)
+    n = len(rates)
+    q = np.zeros(n)
+    carry = np.zeros(n)
+    wait = 0.0
+    t, g = 0, 0
+    lost = timing["yellow_time"] + timing["all_red_time"]
+    while t < duration:
+        if mode == "fixed":
+            green = fixed_green
+        else:
+            green = timing["base_time"] + timing["per_vehicle_time"] * q[g]
+            green = int(max(timing["min_green"], min(timing["max_green"], green)))
+        for step in range(green + lost):
+            q += rng.poisson(rates)
+            if step < green:
+                carry[g] += sat[g]
+                out = min(int(carry[g]), int(q[g]))
+                carry[g] -= int(carry[g])
+                q[g] -= out
+            wait += q.sum()
+            t += 1
+        g = (g + 1) % n
+    arrived_est = max(sum(rates) * duration, 1)
+    return wait / arrived_est, float(q.sum())
+
+
+def compare_controllers(rates, lanes_per_group, timing, duration=1800, seeds=(1, 2, 3)):
+    """Average wait per vehicle (s) under fixed-time and adaptive control."""
+    sat = [SAT_FLOW * max(1, n) for n in lanes_per_group]
+    fixed = [_run_groups(rates, sat, "fixed", timing, duration, s) for s in seeds]
+    adapt = [_run_groups(rates, sat, "adaptive", timing, duration, s) for s in seeds]
+    f = float(np.mean([w for w, _ in fixed]))
+    a = float(np.mean([w for w, _ in adapt]))
+    return {"fixed_wait_s": round(f, 1), "adaptive_wait_s": round(a, 1),
+            "reduction_pct": round(100 * (f - a) / f, 1) if f > 0 else 0.0,
+            "fixed_green_s": 30, "duration_s": duration}

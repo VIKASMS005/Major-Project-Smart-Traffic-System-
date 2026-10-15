@@ -5,8 +5,8 @@
 <div class="panel" style="margin-bottom:18px">
   <div class="panel-head"><div class="panel-title">How incidents are detected</div></div>
   <div class="muted" style="line-height:1.6">Every vehicle is tracked between frames. A vehicle that stays in the same spot for longer than the
-    configured time is reported as a possible accident, breakdown or blockage. Its approach is then skipped in the signal cycle
-    until the vehicle moves, so green time is not wasted on a blocked lane.</div>
+    configured time while other traffic in its direction keeps moving is reported as a possible accident, breakdown or blockage.
+    Its signal group is then skipped in the cycle until the vehicle moves, so green time is not wasted on a blocked lane.</div>
 </div>
 <div class="inc-grid" id="grid"></div>
 {% endblock %}
@@ -21,11 +21,11 @@ async function refresh() {
       <img src="/snapshots/${i.snapshot}" alt="incident snapshot">
       <div class="inc-body">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <b>#${String(i.id).padStart(3, "0")} · ${i.lane_name} (${i.direction})</b>
+          <b>#${String(i.id).padStart(3, "0")} · ${i.group_name}, lane ${i.lane}</b>
           <span class="badge ${i.status === "Active" ? "blocked" : "Low"}">${i.status.toUpperCase()}</span>
         </div>
         <div style="margin-top:6px">${i.type}</div>
-        <div class="row"><span>Vehicle: ${i.vehicle}</span><span>Stopped ${i.duration_s} s</span><span>${i.date} ${i.time}</span></div>
+        <div class="row"><span>${i.vehicle}${i.kind ? " (" + i.kind + ")" : ""}</span><span>Stopped ${i.duration_s} s</span><span>Video ${i.video_time} · ${i.time}</span></div>
       </div>
     </div>`).join("");
 }

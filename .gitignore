@@ -4,3 +4,7 @@ venv/
 .venv/
 outputs/*
 !outputs/.gitkeep
+
+# videos uploaded through the website
+uploads/
+mobileclip_blt.ts
