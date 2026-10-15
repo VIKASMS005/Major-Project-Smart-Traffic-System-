@@ -136,7 +136,8 @@ with tab_sim:
             delta = None if name == "Fixed-time" else f"{100 * (r.avg_wait_s - base) / base:.0f}% vs fixed"
             col.metric(f"{name}: avg wait", f"{r.avg_wait_s:.1f} s", delta, delta_color="inverse")
         st.dataframe(df.round(2), use_container_width=True)
-        qdf = pd.DataFrame(queues)
+        n = min(len(v) for v in queues.values())
+        qdf = pd.DataFrame({k: v[:n] for k, v in queues.items()})
         qdf.index = qdf.index / 60
         qdf.index.name = "minute"
         st.markdown("**Vehicles waiting at the junction over time**")
