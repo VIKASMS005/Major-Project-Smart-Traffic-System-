@@ -1,0 +1,21 @@
+{
+  "video": "city_road.mp4",
+  "frames": 1190,
+  "fps": 6.279008705643067,
+  "density_share_pct": {
+    "LOW": 43.3,
+    "MEDIUM": 44.0,
+    "HIGH": 12.7
+  },
+  "class_totals": {
+    "car": 10240,
+    "motorcycle": 42,
+    "bus": 2207,
+    "truck": 519
+  },
+  "avg_infer_ms": 155.85747899159665,
+  "avg_green_s": {
+    "lane1_green_s": 33.1,
+    "lane2_green_s": 19.69075630252101
+  }
+}

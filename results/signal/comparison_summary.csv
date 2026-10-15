@@ -1,0 +1,13 @@
+scenario,controller,avg_wait_s,avg_queue,max_queue,throughput,arrived,served_pct
+low,Fixed-time,12.92,3.44,14.2,959.4,965.4,99.38
+low,Adaptive (density),7.75,2.06,10.4,955.2,959.0,99.6
+low,RL agent (Q-learning),7.42,1.97,9.2,955.4,958.6,99.67
+medium,Fixed-time,16.55,8.0,26.0,1742.6,1753.2,99.4
+medium,Adaptive (density),10.89,5.26,18.2,1736.0,1741.6,99.68
+medium,RL agent (Q-learning),10.84,5.23,18.2,1735.8,1741.4,99.68
+high,Fixed-time,61.53,41.69,76.8,2408.8,2459.8,97.93
+high,Adaptive (density),20.93,14.19,38.4,2436.2,2450.4,99.42
+high,RL agent (Q-learning),25.9,17.56,45.8,2430.4,2445.0,99.4
+rush,Fixed-time,314.55,214.84,390.8,2090.4,2479.0,84.32
+rush,Adaptive (density),28.81,19.68,48.6,2446.6,2464.8,99.26
+rush,RL agent (Q-learning),18.76,12.82,37.0,2466.0,2474.6,99.65
