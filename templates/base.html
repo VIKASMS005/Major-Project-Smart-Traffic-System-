@@ -58,11 +58,11 @@
       const b = document.getElementById("navIncidents");
       b.textContent = s.active_incidents;
       b.classList.toggle("hidden", !s.active_incidents);
-      const mode = { empty: "WAITING FOR VIDEO", learning: "LEARNING LANES", live: "AI ADAPTIVE MODE", error: "VIDEO ERROR" }[s.status];
+      const mode = { empty: "WAITING FOR VIDEO", learning: "LEARNING LANES", live: "AI ADAPTIVE MODE", done: "ANALYSIS COMPLETE", error: "VIDEO ERROR" }[s.status];
       document.getElementById("modeText").textContent = mode;
       document.getElementById("modeChip").className = "mode " + s.status;
       document.getElementById("crumb").textContent = s.video.name
-        ? `${s.video.name} · ${s.status === "live" ? `${s.lanes.length} lanes, ${s.n_streams} direction${s.n_streams === 1 ? "" : "s"} detected` : s.status}`
+        ? `${s.video.name} · ${s.status === "live" || s.status === "done" ? `${s.lanes.length} lanes, ${s.n_streams} direction${s.n_streams === 1 ? "" : "s"} detected` : s.status}`
         : "No video loaded";
       document.getElementById("sysInfo").textContent = `${s.model} · ${s.infer_ms} ms per frame`;
     } catch (e) {}

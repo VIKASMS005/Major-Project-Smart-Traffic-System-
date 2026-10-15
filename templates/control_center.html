@@ -24,6 +24,10 @@
       <div class="feed-foot"><span id="fVideo">&nbsp;</span><span id="fPerf">&nbsp;</span></div>
     </div>
     <div class="notice hidden" id="notice"></div>
+    <div class="panel hidden" id="donePanel" style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-color:rgba(47,227,107,.45)">
+      <div><b style="color:var(--green)">Analysis complete.</b> <span class="muted" id="doneText"></span></div>
+      <div style="display:flex;gap:8px"><button class="btn sm" id="again">Analyse again</button><a class="btn sm ghost" href="/upload">New video</a></div>
+    </div>
     <div class="panel" id="learnPanel">
       <div class="panel-head"><div class="panel-title">Learning the road layout</div><span class="badge yellow" id="learnPct">0%</span></div>
       <div class="muted" id="learnMsg">Starting…</div>
@@ -89,7 +93,10 @@ async function tick() {
   $("liveUi").classList.toggle("hidden", s.status === "error");
   if (s.status === "error") { $("errorMsg").textContent = s.message; return; }
 
-  const live = s.status === "live";
+  const done = s.status === "done";
+  const live = s.status === "live" || done;
+  $("donePanel").classList.toggle("hidden", !done);
+  if (done) $("doneText").textContent = `The whole ${s.video.duration_s} s video was analysed: ${s.vehicles_counted} vehicles counted. Counts are final and the signal plan below is for the average load over the video.`;
   $("learnPanel").classList.toggle("hidden", live);
   $("lanePanel").classList.toggle("hidden", !live);
   $("notice").classList.toggle("hidden", !(live && s.message));
@@ -102,17 +109,17 @@ async function tick() {
     $("fPerf").textContent = "";
     return;
   }
-  $("fPerf").textContent = `video ${s.video.time}${s.video.loops ? ` (loop ${s.video.loops + 1})` : ""} · ${s.det_fps} detections/s · ${s.infer_ms} ms each`;
+  $("fPerf").textContent = done ? `analysed ${s.video.time} of ${s.video.time}` : `video ${s.video.time} / ${s.video.duration_s} s · ${s.det_fps} detections/s · ${s.infer_ms} ms each`;
 
   const sig = s.signal || {};
   const act = s.groups.find((g) => g.id === sig.active_lane);
   const going = act && (sig.phase === "GREEN" || sig.phase === "YELLOW");
-  $("kNow").textContent = s.total_now;
-  $("kNowSub").textContent = `${s.pcu_now} PCU on the road`;
+  $("kNow").textContent = done ? "—" : s.total_now;
+  $("kNowSub").textContent = done ? "video finished" : `${s.pcu_now} PCU on the road`;
   $("kCounted").textContent = s.vehicles_counted.toLocaleString();
   $("kCountedSub").textContent = `${Math.round(s.groups.reduce((a, g) => a + g.flow_per_min, 0))} vehicles per minute`;
-  $("kPhase").textContent = going ? act.name.replace(" approach", "") : "All red";
-  $("kPhaseSub").textContent = going ? `${sig.phase === "YELLOW" ? "clearing" : "green"} · ${Math.ceil(sig.remaining)} s left` : "clearing the junction";
+  $("kPhase").textContent = done ? "Plan ready" : going ? act.name.replace(" approach", "") : "All red";
+  $("kPhaseSub").textContent = done ? "from the average load" : going ? `${sig.phase === "YELLOW" ? "clearing" : "green"} · ${Math.ceil(sig.remaining)} s left` : "clearing the junction";
   $("kInc").textContent = s.active_incidents;
   $("kInc").style.color = s.active_incidents ? "var(--red)" : "";
   $("kIncSub").textContent = s.active_incidents ? "affected direction skipped" : `${s.incidents_total} so far`;
@@ -120,19 +127,20 @@ async function tick() {
   $("kLanesSub").textContent = `${s.n_streams} traffic direction${s.n_streams === 1 ? "" : "s"}`;
 
   const st = s.settings;
-  $("sigTitle").textContent = s.group_mode === "approach" ? "Signals per approach" : "Signals per lane";
+  $("sigTitle").textContent = (done ? "Final plan per " : "Signals per ") + (s.group_mode === "approach" ? "approach" : "lane");
   $("ruleText").textContent = `Green = ${st.base_time} s + ${st.per_vehicle_time} s × PCU waiting, kept between ${st.min_green} and ${st.max_green} s. ` +
     `Then ${st.yellow_time} s yellow and ${st.all_red_time} s all-red. Cycle ${sig.cycle ?? 0}.`;
   const pb = $("phaseBadge");
   pb.className = "badge " + (sig.phase === "GREEN" ? "green" : sig.phase === "YELLOW" ? "yellow" : "red");
-  pb.textContent = sig.phase === "ALL_RED" ? "ALL RED" : `${sig.phase} · ${Math.ceil(sig.remaining)}s`;
+  pb.textContent = done ? "COMPLETE" : sig.phase === "ALL_RED" ? "ALL RED" : `${sig.phase} · ${Math.ceil(sig.remaining)}s`;
+  if (done) pb.className = "badge green";
 
   $("heads").innerHTML = s.groups.map((g) => {
     const on = g.id === sig.active_lane && (sig.phase === "GREEN" || sig.phase === "YELLOW");
     return `<div class="head ${g.light}"><div class="name">${g.name.replace(" approach", "")}</div>
       <div class="sub">${s.group_mode === "approach" ? `${g.lanes.length} lane${g.lanes.length > 1 ? "s" : ""} · ${g.heading}` : `lane ${g.lanes[0]}`}</div>${lamp(g.light)}
       <div class="t" style="color:${on ? (g.light === "GREEN" ? "var(--green)" : "var(--yellow)") : "var(--text)"}">${g.blocked ? "SKIP" : on ? Math.ceil(sig.remaining) + "s" : g.green_time + "s"}</div>
-      <div class="muted small">${g.count} veh · ${g.pcu} PCU · <span class="badge ${g.blocked ? "blocked" : g.density}">${g.blocked ? "INCIDENT" : g.density}</span></div></div>`;
+      <div class="muted small">${done ? `avg ${(sig.avg_pcu || {})[g.id] ?? 0} PCU · ${g.counted} counted` : `${g.count} veh · ${g.pcu} PCU · <span class="badge ${g.blocked ? "blocked" : g.density}">${g.blocked ? "INCIDENT" : g.density}</span>`}</div></div>`;
   }).join("");
 
   // junction view only makes sense when each approach comes from a different side
@@ -169,6 +177,7 @@ async function loadAlerts() {
     </div>`).join("");
 }
 
+$("again").addEventListener("click", async () => { await fetch("/api/relearn", { method: "POST" }); });
 tick(); loadAlerts();
 setInterval(tick, 500);
 setInterval(loadAlerts, 2000);

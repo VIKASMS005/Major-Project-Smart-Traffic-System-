@@ -32,7 +32,7 @@ async function refresh() {
   if (s.status === "empty") { location.href = "/upload"; return; }
   const cfg = s.settings;
   const unit = s.group_mode === "approach" ? "approach" : "lane";
-  document.getElementById("intro").textContent = s.status !== "live" ? "Signals start once the lanes are learned." :
+  document.getElementById("intro").textContent = s.status === "learning" ? "Signals start once the lanes are learned." :
     `The video shows ${s.n_streams} traffic direction${s.n_streams === 1 ? "" : "s"} with ${s.lanes.length} lanes, so each ${unit} is a signal group. ` +
     `When a group's turn comes, the controller reads the live load of its lanes in passenger car units (PCU) and sets`;
   document.getElementById("formula").innerHTML = `green = ${cfg.base_time} s + ${cfg.per_vehicle_time} s × PCU &nbsp;(${cfg.min_green}–${cfg.max_green} s)`;
@@ -43,8 +43,9 @@ async function refresh() {
   const order = [sig.active_lane, ...(sig.upcoming || []).filter((x) => x !== sig.active_lane)].filter(Boolean);
   document.getElementById("queue").innerHTML = order.map((id, i) => {
     const g = byId[id];
-    const on = i === 0 && sig.phase !== "ALL_RED";
-    return `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""}">${on ? "NOW" : "Next " + i} · ${g.name.replace(" approach", "")}
+    const on = i === 0 && (sig.phase === "GREEN" || sig.phase === "YELLOW");
+    const label = sig.phase === "DONE" ? "Final plan" : on ? "NOW" : "Next " + (sig.active_lane ? i : i + 1);
+    return `<div class="seg ${on ? "on" : ""} ${on && sig.phase === "YELLOW" ? "yellow" : ""}">${label} · ${g.name.replace(" approach", "")}
       <b>${on ? Math.ceil(sig.remaining) + " s left" : g.green_time + " s"}</b></div>`;
   }).join("") + s.groups.filter((g) => g.blocked).map((g) => `<div class="seg blocked">${g.name}<b>SKIPPED</b></div>`).join("");
   document.getElementById("log").innerHTML = a.signal_history.slice(0, 40).map((h) => {

@@ -179,3 +179,5 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .notice { background: rgba(255,198,26,.08); border: 1px solid rgba(255,198,26,.3); color: #f3d77a; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
 @media (max-width: 1200px) { .live-grid { grid-template-columns: 1fr; } .steps { grid-template-columns: 1fr 1fr; } }
 label.drop { display: block; }
+.mode.done { color: var(--accent); border-color: rgba(61,139,253,.4); background: rgba(61,139,253,.08); }
+.mode.done .dot { background: var(--accent); box-shadow: none; animation: none; }

@@ -31,7 +31,7 @@ import numpy as np
 
 from density_estimator import DEFAULT_THRESHOLDS, classify_density, pcu_load
 from lane_detector import assign_lane, discover_lanes, draw_lanes, fallback_layout
-from signal_optimizer import DEFAULT_TIMING, SignalController
+from signal_optimizer import DEFAULT_TIMING, SignalController, compute_signal_plan
 from simulation import compare_controllers
 from tracker import Tracker
 from vehicle_detector import CATEGORIES, CATEGORY_NAMES, VehicleDetector
@@ -233,6 +233,7 @@ class TrafficEngine:
         last_detect = -999
         dets, flagged = [], set()
         last_hist = -1.0
+        last_img = None
         det_times = deque(maxlen=20)
         while self._alive(gen):
             target = int((time.time() - start) * self.fps) if self.realtime else frame_idx
@@ -247,18 +248,12 @@ class TrafficEngine:
                     break
                 frame = fr
                 frame_idx += 1
-            if frame is None and not self.realtime:   # batch mode: done
-                self.status = "done"
+            if frame is None:                       # end of the video: analysis is complete
+                self._finish(last_img)
                 return
-            if frame is None:                       # end of video: loop
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                self.loops += 1
-                self.tracker = Tracker()
-                start, frame_idx, last_detect = time.time(), 0, -999
-                continue
             frame = _prep(frame)
             length = self.total_frames / self.fps if self.total_frames else 0
-            self.video_time = self.loops * length + frame_idx / self.fps
+            self.video_time = frame_idx / self.fps
             if frame_idx - last_detect >= self.settings["detect_every"]:
                 t0 = time.perf_counter()
                 dets = self.detector.detect(frame)
@@ -276,6 +271,7 @@ class TrafficEngine:
                 last_hist = self.video_time
                 self._record_history()
             img = self._render(frame, dets, flagged)
+            last_img = img
             if self.on_frame:
                 self.on_frame(img)
             else:
@@ -375,8 +371,45 @@ class TrafficEngine:
             out[g["id"]] = by
         return out
 
+    def _finish(self, last_img):
+        """The whole video has been analysed once: freeze every count and replace the
+        live signal state with the plan for the average load over the video."""
+        self._record_history()
+        avg = {}
+        for g in self.groups:
+            vals = [h["groups"][g["id"]]["pcu"] for h in self.history if g["id"] in h["groups"]]
+            avg[g["id"]] = round(float(np.mean(vals)), 1) if vals else 0.0
+        t = self._timing()
+        plan = compute_signal_plan({k: round(v) for k, v in avg.items()},
+                                   **{k: t[k] for k in ("base_time", "per_vehicle_time", "min_green", "max_green")})
+        for rec in self.active_incident.values():
+            rec["status"] = "Cleared"
+        self.active_incident.clear()
+        self.blocked_until.clear()
+        incident_groups = {i["group"] for i in self.incidents}
+        with self.lock:
+            self.signal = {"active_lane": None, "phase": "DONE", "remaining": 0, "cycle": self.signal.get("cycle", 0),
+                           "lights": {g["id"]: "RED" for g in self.groups}, "plan": plan, "avg_pcu": avg,
+                           "upcoming": [g["id"] for g in self.groups if g["id"] not in incident_groups],
+                           "had_incident": sorted(incident_groups)}
+        for ls in self.lanes.values():
+            ls.now = _zeros()
+        if last_img is not None:
+            out = last_img.copy()
+            h, w = out.shape[:2]
+            bar = out.copy()
+            cv2.rectangle(bar, (0, h // 2 - 34), (w, h // 2 + 34), (20, 20, 20), -1)
+            cv2.addWeighted(bar, 0.75, out, 0.25, 0, dst=out)
+            msg = f"ANALYSIS COMPLETE  |  {self.vehicles_counted} vehicles in {_fmt_t(self.video_time)}"
+            (tw, _), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            cv2.putText(out, msg, ((w - tw) // 2, h // 2 + 9), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (90, 230, 120), 2,
+                        cv2.LINE_AA)
+            if not self.on_frame:
+                self.jpeg = self._encode(out)
+        self.status = "done"
+
     def _step_signal(self):
-        if not self.controller:
+        if not self.controller or self.status == "done":
             return
         now = self._now()
         loads = {gid: pcu_load(by) for gid, by in self._group_counts().items()}
@@ -528,9 +561,9 @@ class TrafficEngine:
 
     def performance(self) -> dict | None:
         """Fixed-time vs adaptive control for the traffic measured in this video."""
-        if self.status != "live" or self.video_time < 20:
+        if self.status not in ("live", "done") or self.video_time < 20:
             return None
-        if self._perf and time.time() - self._perf_t < 30:
+        if self._perf and (self.status == "done" or time.time() - self._perf_t < 30) and self._perf.get("_final") == (self.status == "done"):
             return self._perf
         snap = self.snapshot()
         rates = [g["flow_per_min"] / 60.0 for g in snap["groups"]]
@@ -539,6 +572,7 @@ class TrafficEngine:
         res = compare_controllers(rates, [len(g["lanes"]) for g in snap["groups"]], self._timing())
         res["groups"] = [g["name"] for g in snap["groups"]]
         res["rates_per_min"] = [round(r * 60, 1) for r in rates]
+        res["_final"] = self.status == "done"
         self._perf, self._perf_t = res, time.time()
         return res
 

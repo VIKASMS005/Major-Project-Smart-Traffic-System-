@@ -142,11 +142,13 @@ def api_relearn():
 @app.route("/stream")
 def stream():
     def frames():
-        last = None
+        last, sent = None, 0.0
         while True:
             jpg = engine.jpeg
-            if jpg is not None and jpg is not last:
-                last = jpg
+            # new frames as they come; the same frame again every second once the
+            # video has finished, so the browser keeps showing it
+            if jpg is not None and (jpg is not last or time.time() - sent > 1):
+                last, sent = jpg, time.time()
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg + b"\r\n"
             time.sleep(0.04)
 
