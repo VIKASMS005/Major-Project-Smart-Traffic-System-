@@ -41,7 +41,7 @@ LIGHT_BGR = {"GREEN": (60, 200, 60), "YELLOW": (0, 200, 255), "RED": (50, 50, 23
 
 DEFAULT_SETTINGS = {
     **DEFAULT_THRESHOLDS, **DEFAULT_TIMING,
-    "learn_seconds": 20,         # video time used to learn lanes
+    "learn_seconds": 30,         # video time used to learn lanes
     "stationary_s": 6,           # incident after a vehicle is stopped this long
     "detect_every": 2,           # run detection on every Nth frame (when the CPU keeps up)
     "confidence": 0.3,
@@ -174,7 +174,7 @@ class TrafficEngine:
         n_frames = int(s["learn_seconds"] * self.fps)
         if self.total_frames > 0:
             n_frames = min(n_frames, self.total_frames)
-        stride = max(1, round(self.fps / 8))           # about 8 detections per video second
+        stride = max(1, round(self.fps / 6))           # about 6 detections per video second
         tracker = Tracker(max_missed=4)
         frame, f = None, 0
         while f < n_frames and self._alive(gen):
@@ -301,7 +301,7 @@ class TrafficEngine:
                 ls.speeds.append(speed)
             if speed > 0.5:
                 moving_in_stream[ls.stream.index] = moving_in_stream.get(ls.stream.index, 0) + 1
-            if t.hits >= 3 and not t.counted:
+            if t.hits >= 4 and not t.counted:
                 t.counted = True
                 ls.counted[d["class"]] += 1
                 ls.events.append(self.video_time)
@@ -311,14 +311,19 @@ class TrafficEngine:
                 window = [p for p in t.history if frame_idx - p[0] <= stat_frames]
                 if len(window) >= 3:
                     xs = np.array([(p[1], p[2]) for p in window])
-                    if np.max(np.linalg.norm(xs - xs.mean(0), axis=1)) < 0.3 * width:
+                    before = [p for p in t.history if frame_idx - p[0] > stat_frames]
+                    # it must have been driving before it stopped (vehicles that were
+                    # already standing in a queue when first seen are not incidents)
+                    moved_before = len(before) >= 2 and np.hypot(before[-1][1] - before[0][1],
+                                                                 before[-1][2] - before[0][2]) > 1.0 * width
+                    if moved_before and np.max(np.linalg.norm(xs - xs.mean(0), axis=1)) < 0.3 * width:
                         stopped.append((i, d, t, ls, frame_idx - window[0][0]))
         for lid, c in now_counts.items():
             self.lanes[lid].now = c
         for i, d, t, ls, dur in stopped:
             # traffic queued at a red light also stands still; a vehicle counts as an
-            # incident when others in its direction keep moving, or after 3x the window
-            if moving_in_stream.get(ls.stream.index, 0) > 0 or dur >= 3 * stat_frames:
+            # incident only when other vehicles in its direction keep moving past it
+            if moving_in_stream.get(ls.stream.index, 0) >= 2:
                 flagged.add(i)
                 self._incident(ls, d, t, frame, dur)
         for ls in self.lanes.values():
@@ -331,10 +336,15 @@ class TrafficEngine:
         self.blocked_until[gid] = self._now() + self.settings["incident_hold_s"]
         cur = self.active_incident.get(gid)
         x1, y1, x2, y2 = d["bbox"]
-        if cur and (cur["_track"] == t.id or
-                    abs((x1 + x2) / 2 - cur["_cx"]) + abs(y2 - cur["_cy"]) < 1.5 * (x2 - x1)):
+        if cur:             # one active incident per signal group; keep it up to date
             cur["duration_s"] = round(max(cur["duration_s"], dur_frames / self.fps), 1)
             return
+        for old in self.incidents[:10]:   # the same stopped vehicle seen again under a new id
+            if self.video_time - old["_vt"] < 30 and old["lane"] == ls.lane.id and \
+                    abs((x1 + x2) / 2 - old["_cx"]) + abs(y2 - old["_cy"]) < 1.5 * (x2 - x1):
+                old["status"] = "Active"
+                self.active_incident[gid] = old
+                return
         ts = datetime.now()
         snap = draw_lanes(frame, self.streams)
         cv2.rectangle(snap, (x1, y1), (x2, y2), (40, 40, 235), 3)
@@ -346,7 +356,8 @@ class TrafficEngine:
                "group_name": group["name"], "vehicle": CATEGORY_NAMES[d["class"]], "kind": d.get("kind", ""),
                "duration_s": round(dur_frames / self.fps, 1),
                "type": "Stationary vehicle: possible breakdown, accident or blockage",
-               "snapshot": name, "status": "Active", "_track": t.id, "_cx": (x1 + x2) / 2, "_cy": y2}
+               "snapshot": name, "status": "Active", "_track": t.id, "_cx": (x1 + x2) / 2, "_cy": y2,
+               "_vt": self.video_time}
         self.active_incident[gid] = rec
         self.incidents.insert(0, rec)
 

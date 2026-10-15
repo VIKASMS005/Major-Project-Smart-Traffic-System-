@@ -230,10 +230,18 @@ def _run_groups(rates, sat, mode, timing, duration, seed, fixed_green=30):
 def compare_controllers(rates, lanes_per_group, timing, duration=1800, seeds=(1, 2, 3)):
     """Average wait per vehicle (s) under fixed-time and adaptive control."""
     sat = [SAT_FLOW * max(1, n) for n in lanes_per_group]
+    # Webster's flow ratio Y = sum(arrivals / saturation flow). When Y is near or
+    # above 1 no signal plan can clear the queues and every controller's wait just
+    # grows with the simulated time, so the comparison is made at the measured
+    # split of traffic with the total scaled to Y = 0.75.
+    Y = sum(r / s_ for r, s_ in zip(rates, sat))
+    scale = 0.75 / Y if Y > 0.75 else 1.0
+    rates = [r * scale for r in rates]
     fixed = [_run_groups(rates, sat, "fixed", timing, duration, s) for s in seeds]
     adapt = [_run_groups(rates, sat, "adaptive", timing, duration, s) for s in seeds]
     f = float(np.mean([w for w, _ in fixed]))
     a = float(np.mean([w for w, _ in adapt]))
     return {"fixed_wait_s": round(f, 1), "adaptive_wait_s": round(a, 1),
             "reduction_pct": round(100 * (f - a) / f, 1) if f > 0 else 0.0,
-            "fixed_green_s": 30, "duration_s": duration}
+            "fixed_green_s": 30, "duration_s": duration, "flow_ratio": round(Y, 2),
+            "demand_scale": round(scale, 2)}

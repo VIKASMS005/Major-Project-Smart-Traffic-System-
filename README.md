@@ -16,8 +16,9 @@ a CCTV or elevated camera and the system:
 4. **Controls the signals.** Each traffic direction (or each lane, if the video shows one direction) gets a
    green time that follows its measured load. A vehicle that stops while other traffic keeps moving is
    reported as an incident and its direction is skipped until it clears.
-5. **Compares with a fixed-time signal** by simulating both controllers at the arrival rates measured
-   in the video.
+5. **Compares with a fixed-time signal** by simulating both controllers with the traffic measured in the
+   video. When the measured demand is more than any signal could clear, it keeps the measured split between
+   approaches and scales the total down so the comparison stays meaningful.
 
 Everything runs on a normal laptop CPU. No GPU, camera hardware or model training is needed.
 
@@ -41,7 +42,7 @@ The first install downloads PyTorch, which takes a few minutes. The detection mo
 python app.py
 ```
 
-Open **http://localhost:5000**, then upload a traffic video (or click *Analyse* on one of the sample clips).
+Open **http://localhost:5000**, then upload a traffic video (or click *Analyse* on the sample clip).
 
 | Page | What it shows |
 |---|---|
@@ -52,13 +53,13 @@ Open **http://localhost:5000**, then upload a traffic video (or click *Analyse* 
 | **Incidents** | Every stationary-vehicle incident with a snapshot, lane, vehicle type and duration |
 | **Settings** | Density thresholds, green-time rule, yellow and all-red times, detection confidence, incident sensitivity and lane-learning time. Changes apply live; *Re-learn lanes* runs lane discovery again |
 
-While the lanes are being learned (about 20 seconds of video), the page shows the vehicle paths being collected.
+While the lanes are being learned (the first 30 seconds of video), the page shows the vehicle paths being collected.
 After that the video plays in real time and loops.
 
 ## Run the batch pipeline
 
 ```bash
-python main.py --video sample_videos/highway_sample.mp4
+python main.py --video sample_videos/indian_junction_sample.mp4
 ```
 
 Processes the whole video and prints a per-lane report (2W / 3W / 4W / HV counts and flow) and the adaptive
@@ -74,10 +75,13 @@ signal plan. It saves `outputs/<video>_annotated.mp4` and incident snapshots, an
 | 4-Wheeler | cars, jeeps, vans | 1.0 |
 | Heavy Vehicle | buses and trucks (6 or more wheels) | 3.0 |
 
-The default model is `models/traffic_yoloe_s.pt`: YOLOE, an open-vocabulary YOLO, with the vocabulary
-*motorcycle, scooter, bicycle, auto rickshaw, car, bus, truck* built in. The standard COCO YOLOv8 model has no
-auto-rickshaw class, so this model is what makes 3-wheeler detection possible without training. If the file
-is missing, `models/yolov8n.pt` (COCO) is used instead.
+Two pretrained models work together, with no training:
+
+* `models/yolov8n.pt` (COCO) finds and boxes the vehicles. It has the best recall for cars, buses, trucks
+  and motorcycles, but no auto-rickshaw class.
+* `models/traffic_yoloe_s.pt` is YOLOE, an open-vocabulary YOLO, with the vocabulary *motorcycle, scooter,
+  bicycle, auto rickshaw, car, bus, truck* built in. Where it sees an auto-rickshaw, that label replaces the
+  COCO label, and autos the COCO model missed are added.
 
 ## How lanes are found (`src/lane_detector.py`)
 
@@ -89,6 +93,9 @@ is missing, `models/yolov8n.pt` (COCO) is used instead.
    in vehicle widths at each depth of the image, so perspective (far vehicles look smaller) does not matter.
 4. **Lane shapes.** Each cluster gives a smoothed centre line and a width profile, which become the lane
    polygon drawn on the video and used to assign vehicles to lanes.
+5. **Waiting queues.** Traffic held at a red light hardly moves, so its lanes cannot be found from motion.
+   Where many vehicles stand outside every lane found so far, that area becomes an approach of its own,
+   split into lanes about 1.4 vehicle widths wide.
 
 Lanes that no vehicle uses during the learning period are not found, so a longer learning time (Settings)
 helps on quiet roads.
@@ -109,7 +116,7 @@ Indian traffic footage shows the 2-wheeler and 3-wheeler classes best. Free sour
 | 4.4 Data preprocessing | `src/vehicle_detector.py` → `preprocess()` | Gaussian denoising and CLAHE contrast normalisation |
 | 4.5 Traffic detection | `src/vehicle_detector.py`, `src/tracker.py` | YOLOE detection, 2W/3W/4W/HV classes, multi-object tracking |
 | 4.6 Traffic analysis | `src/lane_detector.py`, `src/density_estimator.py` | Automatic lane discovery; PCU density per lane (Low / Medium / High) |
-| Objective 3: incident detection | `src/live_engine.py` → `_analyse()` | A vehicle stopped longer than the set time while its direction keeps moving |
+| Objective 3: incident detection | `src/live_engine.py` → `_analyse()` | A vehicle that was driving, then stays stopped longer than the set time while traffic in its direction moves past |
 | 4.7 Signal optimisation | `src/signal_optimizer.py` | `green = base + k × PCU`, clamped; live state machine that skips blocked groups |
 | 4.7 (comparison) | `src/simulation.py` | Fixed-time vs adaptive at the measured arrival rates; also a 4-way junction model with a Q-learning agent |
 | Output layer | `app.py`, `templates/`, `static/`, `src/dashboard_generator.py` | Web control centre and standalone simulator |
@@ -121,7 +128,7 @@ Indian traffic footage shows the 2-wheeler and 3-wheeler classes best. Free sour
 ├── main.py                   # batch pipeline for one video + standalone simulator
 ├── requirements.txt
 ├── models/                   # traffic_yoloe_s.pt (default), yolov8n.pt (fallback), RL Q-table
-├── sample_videos/            # two sample clips
+├── sample_videos/            # indian_junction_sample.mp4 (Indian junction, autos, buses, bikes)
 ├── uploads/                  # videos uploaded through the website (created on first upload)
 ├── outputs/                  # annotated videos, simulator HTML, incident snapshots
 ├── src/

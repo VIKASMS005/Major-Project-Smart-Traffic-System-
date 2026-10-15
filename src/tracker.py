@@ -28,7 +28,7 @@ class Track:
         self.hits = 1
         self.missed = 0
         x1, y1, x2, y2 = det["bbox"]
-        self.history = [(frame_idx, (x1 + x2) / 2, y2, x2 - x1)]   # ground point + box width
+        self.history = [(frame_idx, (x1 + x2) / 2, y2, x2 - x1, y2 - y1)]   # ground point + box size
         self.velocity = np.zeros(2)
         self.lane = None
         self.counted = False
@@ -62,7 +62,8 @@ class Tracker:
                 dx = (d["bbox"][0] + d["bbox"][2]) / 2 - (pb[0] + pb[2]) / 2
                 dy = d["bbox"][3] - pb[3]
                 dist = (dx * dx + dy * dy) ** 0.5 / tw
-                if iou >= self.min_iou or dist < self.max_jump * 0.5:
+                # a lost track is only re-matched by overlap, never by distance alone
+                if iou >= self.min_iou or (t.missed == 0 and dist < self.max_jump * 0.5):
                     pairs.append((iou - 0.2 * dist, ti, di))
         pairs.sort(reverse=True)
         used_t, used_d = set(), set()
@@ -73,17 +74,17 @@ class Tracker:
             used_d.add(di)
             t, d = self.tracks[ti], detections[di]
             x1, y1, x2, y2 = d["bbox"]
-            last_f, lx, ly, _ = t.history[-1]
+            last_f, lx, ly = t.history[-1][:3]
             gx, gy = (x1 + x2) / 2, y2
             if frame_idx > last_f:
                 v = np.array([gx - lx, gy - ly]) / (frame_idx - last_f)
-                t.velocity = 0.6 * t.velocity + 0.4 * v if t.hits > 1 else v
+                t.velocity = 0.7 * t.velocity + 0.3 * v if t.hits > 1 else 0.5 * v
             t.bbox = d["bbox"]
             t.hits += 1
             t.missed = 0
             if d["confidence"] > 0.4:
                 t.cls = d["class"]
-            t.history.append((frame_idx, gx, gy, x2 - x1))
+            t.history.append((frame_idx, gx, gy, x2 - x1, y2 - y1))
             d["track"] = t
         for ti, t in enumerate(self.tracks):
             if ti not in used_t:
@@ -101,8 +102,8 @@ class Tracker:
         return self.tracks
 
     def trajectories(self):
-        """All tracks seen so far as id -> [(x, y, width), ...]."""
+        """All tracks seen so far as id -> [(x, y, width, height), ...]."""
         out = {}
         for t in self.finished + self.tracks:
-            out[t.id] = [(x, y, w) for _, x, y, w in t.history]
+            out[t.id] = [(x, y, w, h) for _, x, y, w, h in t.history]
         return out

@@ -11,7 +11,7 @@ Analyses one traffic video end to end, without the web server:
    self-contained signal simulator (outputs/traffic_light_simulator.html).
 
     python main.py --video path/to/traffic.mp4
-    python main.py --video sample_videos/highway_sample.mp4 --no-browser
+    python main.py --video sample_videos/indian_junction_sample.mp4 --no-browser
 
 For the live web control centre, run `python app.py` instead.
 """
@@ -37,7 +37,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", required=True, help="traffic video to analyse")
     ap.add_argument("--outputs", default=os.path.join(ROOT, "outputs"))
-    ap.add_argument("--learn-seconds", type=float, default=20, help="video seconds used to learn the lanes")
+    ap.add_argument("--learn-seconds", type=float, default=30, help="video seconds used to learn the lanes")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
     if not os.path.exists(args.video):

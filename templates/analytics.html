@@ -95,7 +95,9 @@ async function refresh() {
 async function loadPerf() {
   const p = await (await fetch("/api/performance")).json();
   if (!p) return;
-  document.getElementById("perfNote").textContent = `queue simulation of ${p.duration_s / 60} min at the measured arrival rates`;
+  document.getElementById("perfNote").textContent = p.demand_scale < 1
+    ? `${p.duration_s / 60} min queue simulation. Measured demand is above what any signal can clear (flow ratio ${p.flow_ratio}), so it is scaled to ${Math.round(p.demand_scale * 100)}% keeping the measured split`
+    : `queue simulation of ${p.duration_s / 60} min at the measured arrival rates`;
   const rows = p.groups.map((g, i) => `<tr><td>${g}</td><td class="num">${p.rates_per_min[i]}</td></tr>`).join("");
   const better = p.reduction_pct >= 0;
   document.getElementById("perfBox").innerHTML = `

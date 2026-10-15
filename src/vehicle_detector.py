@@ -9,11 +9,10 @@ by number of wheels:
     4-Wheeler      cars, jeeps, vans
     Heavy Vehicle  buses and trucks (6 or more wheels)
 
-The default model is YOLOE (an open-vocabulary YOLO) with the vocabulary
-"motorcycle, scooter, bicycle, auto rickshaw, car, bus, truck" built in, so it
-recognises auto-rickshaws, which the standard COCO model cannot. If that model
-file is missing, the COCO YOLOv8n model is used instead (no 3-wheeler class).
-No training is needed for either.
+Two pretrained models work together (no training needed): COCO YOLOv8n finds
+the vehicles, and YOLOE, an open-vocabulary YOLO with the vocabulary
+"motorcycle, scooter, bicycle, auto rickshaw, car, bus, truck" built in,
+recognises auto-rickshaws, which the COCO model cannot.
 """
 from __future__ import annotations
 
@@ -55,40 +54,74 @@ def preprocess(frame: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
 
-class VehicleDetector:
-    """Wraps a YOLO model and returns categorised vehicle detections for a frame."""
+class _Model:
+    def __init__(self, path):
+        self.yolo = YOLO(path)
+        self.name = os.path.basename(path)
+        self.names = self.yolo.names
+        self.class_map = {i: NAME_TO_CATEGORY[n] for i, n in self.names.items() if n in NAME_TO_CATEGORY}
 
-    def __init__(self, model_path: str = DEFAULT_MODEL, conf: float = 0.3, imgsz: int = 640):
-        if not os.path.exists(model_path):
-            model_path = FALLBACK_MODEL if os.path.exists(FALLBACK_MODEL) else "yolov8n.pt"
-        self.model = YOLO(model_path)
-        self.model_name = os.path.basename(model_path)
+    def __call__(self, img, conf, imgsz):
+        r = self.yolo(img, conf=conf, imgsz=imgsz, classes=list(self.class_map), verbose=False)[0]
+        out = []
+        for (x1, y1, x2, y2), cls, cf in zip(r.boxes.xyxy.tolist(), r.boxes.cls.int().tolist(),
+                                             r.boxes.conf.tolist()):
+            out.append({"class": self.class_map[cls], "kind": self.names[cls], "confidence": round(float(cf), 3),
+                        "bbox": (int(x1), int(y1), int(x2), int(y2)), "center": ((x1 + x2) / 2, (y1 + y2) / 2)})
+        return out
+
+
+class VehicleDetector:
+    """Two-model detector.
+
+    * YOLOv8 (COCO) finds and boxes the vehicles. It has the best recall for cars,
+      buses, trucks and motorcycles, but no auto-rickshaw class.
+    * YOLOE (open vocabulary, Indian traffic words) looks at the same frame. Where it
+      sees an auto-rickshaw (or a two-wheeler), that label replaces the COCO label,
+      and autos COCO missed are added.
+
+    If only one of the two model files exists, that model is used on its own.
+    """
+
+    def __init__(self, model_path: str = DEFAULT_MODEL, conf: float = 0.3, imgsz: int = 640,
+                 base_path: str = FALLBACK_MODEL):
+        self.base = _Model(base_path) if os.path.exists(base_path) else None
+        self.vocab = _Model(model_path) if os.path.exists(model_path) and model_path != base_path else None
+        if self.base is None and self.vocab is None:
+            self.base = _Model("yolov8n.pt")            # Ultralytics downloads it
+        self.model_name = " + ".join(m.name for m in (self.base, self.vocab) if m)
         self.conf = conf
         self.imgsz = imgsz
-        names = self.model.names
-        self.class_map = {i: NAME_TO_CATEGORY[n] for i, n in names.items() if n in NAME_TO_CATEGORY}
-        self.raw_names = names
+        self.vocab_conf = 0.15        # open-vocabulary scores run lower than COCO scores
+        self.vocab_imgsz = 960
 
     @property
     def supports_3w(self) -> bool:
-        return "3W" in self.class_map.values()
+        return self.vocab is not None and "3W" in self.vocab.class_map.values()
 
     def detect(self, frame: np.ndarray) -> list[dict]:
         """Return detections: class (category), kind (model label), confidence, bbox, center."""
-        result = self.model(preprocess(frame), conf=self.conf, imgsz=self.imgsz,
-                            classes=list(self.class_map), verbose=False)[0]
-        detections = []
-        for (x1, y1, x2, y2), cls, cf in zip(result.boxes.xyxy.tolist(),
-                                             result.boxes.cls.int().tolist(),
-                                             result.boxes.conf.tolist()):
-            detections.append({
-                "class": self.class_map[cls],
-                "kind": self.raw_names[cls],
-                "confidence": round(float(cf), 3),
-                "bbox": (int(x1), int(y1), int(x2), int(y2)),
-                "center": ((x1 + x2) / 2, (y1 + y2) / 2),
-            })
-        return _suppress_overlaps(detections)
+        img = preprocess(frame)
+        base = self.base(img, self.conf, self.imgsz) if self.base else []
+        if self.vocab is None:
+            return _suppress_overlaps(base)
+        vocab = self.vocab(img, min(self.conf, self.vocab_conf), self.vocab_imgsz)
+        if self.base is None:
+            return _suppress_overlaps(vocab)
+        special = [v for v in vocab if v["class"] in ("3W", "2W")]
+        used = set()
+        for d in base:
+            best, bi = 0.45, None
+            for i, v in enumerate(special):
+                o = _iou(d["bbox"], v["bbox"])
+                if o > best:
+                    best, bi = o, i
+            if bi is not None and not (special[bi]["class"] == "2W" and d["class"] == "HV"):
+                used.add(bi)
+                d["class"], d["kind"] = special[bi]["class"], special[bi]["kind"]
+        extra = [v for i, v in enumerate(special) if i not in used and v["class"] == "3W"
+                 and v["confidence"] >= 0.25 and all(_iou(v["bbox"], d["bbox"]) < 0.3 for d in base)]
+        return _suppress_overlaps(base + extra)
 
     @staticmethod
     def draw(frame: np.ndarray, detections: list[dict], flagged: set[int] | None = None) -> np.ndarray:
@@ -108,6 +141,14 @@ class VehicleDetector:
             cv2.putText(out, label, (x1 + 3, ty - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                         (255, 255, 255), 1, cv2.LINE_AA)
         return out
+
+
+def _iou(a, b):
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / u if u > 0 else 0.0
 
 
 def _suppress_overlaps(dets: list[dict], thr: float = 0.7) -> list[dict]:

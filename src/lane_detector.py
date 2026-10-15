@@ -126,23 +126,38 @@ def discover_lanes(trajectories: dict[int, list[tuple[float, float, float]]],
     """trajectories: track id -> list of (x, y, box_width) ground points in time order."""
     h, w = frame_shape[:2]
     tracks = []
+    slow = []       # vehicles that stood or crawled: they reveal waiting queues
     for pts in trajectories.values():
         if len(pts) < MIN_TRACK_POINTS:
             continue
         p = np.array(pts, dtype=float)
+        if len(p) >= 8 and np.linalg.norm(p[-1, :2] - p[0, :2]) < 1.2 * np.median(p[:, 2]):
+            slow.append((np.median(p[:, :2], axis=0), float(np.median(p[:, 2])), p[-1, :2] - p[0, :2]))
+        # light smoothing: running median over 5 points removes box jitter
+        k = 2
+        sm = p.copy()
+        for i in range(len(p)):
+            sm[i, :2] = np.median(p[max(0, i - k):i + k + 1, :2], axis=0)
+        p = sm
         disp = p[-1, :2] - p[0, :2]
         dist = np.linalg.norm(disp)
         if dist < max(30.0, 1.2 * np.median(p[:, 2])):
             continue                                   # parked / barely moving
+        path = np.sum(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1))
+        if dist < 0.7 * path:
+            continue                                   # zig-zag: tracker swapped vehicles
+        # a jump of more than one vehicle width between samples is an id switch
+        if np.max(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1)) > 1.0 * np.median(p[:, 2]):
+            continue
         tracks.append((p, disp / dist, dist))
-    if len(tracks) < 3:
+    if len(tracks) < 3 and len(slow) < 5:
         return []
 
     angles = np.array([math.atan2(u[1], u[0]) for _, u, _ in tracks])
     weights = np.array([d for _, _, d in tracks])
     streams: list[Stream] = []
     min_tracks = max(3, int(0.06 * len(tracks)))
-    for idx in _cluster_angles(angles, weights):
+    for idx in (_cluster_angles(angles, weights) if len(tracks) >= 3 else []):
         if len(idx) < min_tracks:
             continue
         d = np.sum([tracks[i][1] * tracks[i][2] for i in idx], axis=0)
@@ -162,7 +177,10 @@ def discover_lanes(trajectories: dict[int, list[tuple[float, float, float]]],
     for s in streams:
         d = s.direction
         n = np.array([-d[1], d[0]])
-        members = [tracks[i][0] for i in s._members]
+        # sideways size of a vehicle: its box width for traffic moving up/down the
+        # image, its box height for traffic crossing the image
+        members = [np.column_stack([tracks[i][0][:, :2], np.abs(n[0]) * tracks[i][0][:, 2] +
+                                    np.abs(n[1]) * tracks[i][0][:, 3]]) for i in s._members]
         allp = np.vstack(members)
         S = allp[:, :2] @ d
         s_min, s_max = np.percentile(S, 1), np.percentile(S, 99)
@@ -194,7 +212,7 @@ def discover_lanes(trajectories: dict[int, list[tuple[float, float, float]]],
                     dd = abs(prof[a, ka] - prof[b, kb]) / ((W[ka] + W[kb]) / 2) + 0.3
                 D[a, b] = D[b, a] = dd
         groups = _agglomerate(D, SAME_LANE_DIST)
-        min_lane = max(2, int(0.05 * m))
+        min_lane = max(4, int(0.12 * m))
         groups = [g for g in groups if len(g) >= min_lane] or [max(groups, key=len)]
 
         centres = []
@@ -238,7 +256,76 @@ def discover_lanes(trajectories: dict[int, list[tuple[float, float, float]]],
             lane.build_polygon(d)
             s.lanes.append(lane)
         del s._members
-    return [s for s in streams if s.lanes]
+    streams = [s for s in streams if s.lanes]
+    queue = _queue_stream(slow, streams, len(streams), lane_no, (h, w))
+    if queue:
+        streams.append(queue)
+    return streams
+
+
+def _queue_stream(slow, streams, index, lane_no, shape):
+    """A waiting queue: many vehicles standing outside every lane learned from motion.
+
+    At a red light the vehicles of an approach hardly move while learning, so
+    their lanes cannot be found from motion. The area where they stand becomes
+    the approach, and it is split into lanes about 1.4 vehicle widths wide.
+    The direction is taken from their small movements (default: away from the
+    camera, as most traffic cameras look along the road).
+    """
+    h, w = shape
+    out = []
+    for pos, width, disp in slow:
+        inside = any(cv2.pointPolygonTest(l.polygon, (float(pos[0]), float(pos[1])), False) >= 0
+                     for s in streams for l in s.lanes)
+        if not inside:
+            out.append((pos, width, disp))
+    if len(out) < 6:
+        return None
+    P = np.array([p for p, _, _ in out])
+    W = np.array([wd for _, wd, _ in out])
+    disp = np.median(np.array([d for _, _, d in out]), axis=0)
+    dy = -1.0 if disp[1] <= 0 or np.linalg.norm(disp) < 0.15 * np.median(W) else 1.0
+    d = np.array([0.0, dy])
+    # keep the main cluster of standing vehicles (drop isolated ones)
+    keep = [i for i in range(len(P)) if np.sum(np.linalg.norm(P - P[i], axis=1) < 2.5 * W[i]) >= 3]
+    if len(keep) < 6:
+        return None
+    P, W = P[keep], W[keep]
+    wfit = np.polyfit(P[:, 1], W, 1) if np.ptp(P[:, 1]) > 0 else np.array([0.0, np.median(W)])
+    y0, y1 = np.percentile(P[:, 1], 3), min(h - 1, np.percentile(P[:, 1], 97) + 0.3 * np.median(W))
+    ys = np.linspace(y0, y1, 8)
+    left, right = [], []
+    for y in ys:
+        near = np.abs(P[:, 1] - y) < max(0.6 * np.polyval(wfit, y), 8)
+        sel = P[near] if near.sum() >= 2 else P
+        vw = max(np.polyval(wfit, y), 8)
+        left.append(max(0, np.percentile(sel[:, 0], 5) - 0.5 * vw))
+        right.append(min(w - 1, np.percentile(sel[:, 0], 95) + 0.5 * vw))
+    left, right = np.array(left), np.array(right)
+    # straight edges look like a road; fit lines through the measured edges
+    left = np.polyval(np.polyfit(ys, left, 1), ys)
+    right = np.polyval(np.polyfit(ys, right, 1), ys)
+    width_bottom = right[-1] - left[-1]
+    n_lanes = int(np.clip(round(width_bottom / (1.4 * max(np.polyval(wfit, ys[-1]), 8))), 1, 4))
+    compass, heading = _compass(d)
+    names = {s.name for s in streams}
+    name = f"{compass} approach" if f"{compass} approach" not in names else f"{compass} approach 2"
+    q = Stream(index=index, direction=d, name=name, compass=compass, heading="waiting queue", track_count=len(P))
+    order = ys[::-1] if dy < 0 else ys          # centre line runs in the travel direction
+    for k in range(n_lanes):
+        a = left + (right - left) * k / n_lanes
+        b = left + (right - left) * (k + 1) / n_lanes
+        cx = (a + b) / 2
+        pts = np.column_stack([cx, ys])
+        half = (b - a) / 2
+        if dy < 0:
+            pts, half = pts[::-1], half[::-1]
+        lane_no += 1
+        lane = Lane(id=f"L{lane_no}", stream=index, index_in_stream=k + 1, centre=pts, half_width=half,
+                    color=LANE_COLORS[(lane_no - 1) % len(LANE_COLORS)])
+        lane.build_polygon(d)
+        q.lanes.append(lane)
+    return q
 
 
 def fallback_layout(frame_shape: tuple[int, int]) -> list[Stream]:
