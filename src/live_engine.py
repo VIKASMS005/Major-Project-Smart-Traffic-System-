@@ -112,6 +112,8 @@ class TrafficEngine:
         self.total_frames = 0
         self.video_time = 0.0
         self.infer_ms = 0.0
+        self.infer_total_ms = 0.0
+        self.det_count = 0
         self.det_fps = 0.0
         self.vehicles_counted = 0
         self.tracker = Tracker()
@@ -261,6 +263,8 @@ class TrafficEngine:
                 t0 = time.perf_counter()
                 dets = self.detector.detect(frame)
                 self.infer_ms = (time.perf_counter() - t0) * 1000
+                self.infer_total_ms += self.infer_ms
+                self.det_count += 1
                 det_times.append(time.time())
                 if len(det_times) > 1:
                     self.det_fps = (len(det_times) - 1) / max(det_times[-1] - det_times[0], 1e-6)

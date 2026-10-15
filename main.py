@@ -30,6 +30,7 @@ from dashboard_generator import generate_dashboard  # noqa: E402
 from density_estimator import classify_density, pcu_load  # noqa: E402
 from live_engine import TrafficEngine  # noqa: E402
 from signal_optimizer import compute_signal_plan  # noqa: E402
+from simulation import compare_controllers  # noqa: E402
 from vehicle_detector import CATEGORIES  # noqa: E402
 
 
@@ -122,7 +123,20 @@ def main():
           ", ".join(f"{k} {v}" for k, v in snap["mix_counted"].items()) +
           f")   ·   PCU load of the mix: {pcu_load(snap['mix_counted'])}")
     print(f"  Incidents: {len(engine.incidents)}   ·   full signal cycle: {cycle} s   ·   processed in {time.time() - t0:.0f} s")
-    print(f"  Annotated video: {os.path.relpath(out_video, ROOT)}\n")
+    print(f"  Detection: {engine.detector.model_name}, {engine.det_count} frames analysed, "
+          f"{engine.infer_total_ms / max(engine.det_count, 1):.0f} ms per frame on average")
+    print(f"  Annotated video: {os.path.relpath(out_video, ROOT)}")
+
+    rates = [sum(engine.lanes[l].counted_total if hasattr(engine.lanes[l], "counted_total") else
+                 sum(engine.lanes[l].counted.values()) for l in g["lanes"]) / duration for g in snap["groups"]]
+    if any(rates):
+        cmp = compare_controllers(rates, [len(g["lanes"]) for g in snap["groups"]], engine._timing())
+        scaled = (f" (measured demand is above what any signal can clear, flow ratio {cmp['flow_ratio']}; "
+                  f"scaled to {cmp['demand_scale'] * 100:.0f}% keeping the measured split)") if cmp["demand_scale"] < 1 else ""
+        print(f"{line}\n  ADAPTIVE vs FIXED-TIME  ({cmp['duration_s'] // 60} min queue simulation, arrivals per min: " +
+              ", ".join(f"{g['name']} {r * 60:.1f}" for g, r in zip(snap["groups"], rates)) + f"){scaled}")
+        print(f"  Average wait per vehicle: fixed-time ({cmp['fixed_green_s']} s green each) {cmp['fixed_wait_s']} s, "
+              f"adaptive {cmp['adaptive_wait_s']} s, reduction {cmp['reduction_pct']}%\n{line}\n")
 
     html = generate_dashboard(results, os.path.join(args.outputs, "traffic_light_simulator.html"),
                               yellow=st["yellow_time"], title=os.path.basename(args.video))
